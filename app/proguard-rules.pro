@@ -5,20 +5,20 @@
 -keepattributes *Annotation*, InnerClasses, Signature, RuntimeVisible*Annotations
 -dontnote kotlinx.serialization.**
 
--keepclassmembers class com.instagrum.local.model.** {
+-keepclassmembers class com.instaos.app.model.** {
     *** Companion;
     kotlinx.serialization.KSerializer serializer(...);
 }
--keep,includedescriptorclasses class com.instagrum.local.model.**$$serializer { *; }
--keep @kotlinx.serialization.Serializable class com.instagrum.local.model.** { *; }
+-keep,includedescriptorclasses class com.instaos.app.model.**$$serializer { *; }
+-keep @kotlinx.serialization.Serializable class com.instaos.app.model.** { *; }
 
 -keepclasseswithmembers class kotlinx.serialization.json.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
 
 # WorkManager instantiates the background worker reflectively by class name.
--keep class com.instagrum.local.notifications.ActivityWorker { <init>(...); }
+-keep class com.instaos.app.notifications.ActivityWorker { <init>(...); }
 
 # The service and boot receiver are started by the system from the manifest.
--keep class com.instagrum.local.notifications.GrowthService { *; }
--keep class com.instagrum.local.notifications.BootReceiver { *; }
+-keep class com.instaos.app.notifications.GrowthService { *; }
+-keep class com.instaos.app.notifications.BootReceiver { *; }

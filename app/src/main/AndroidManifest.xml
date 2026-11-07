@@ -17,7 +17,7 @@
         android:icon="@drawable/ic_launcher"
         android:roundIcon="@drawable/ic_launcher"
         android:supportsRtl="true"
-        android:theme="@style/Theme.InstaGRUM"
+        android:theme="@style/Theme.InstaOS"
         android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"

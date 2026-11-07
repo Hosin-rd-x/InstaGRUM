@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "InstaGRUM"
+rootProject.name = "InstaOS"
 include(":app")

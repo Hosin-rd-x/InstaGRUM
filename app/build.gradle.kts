@@ -8,31 +8,48 @@ plugins {
 }
 
 android {
-    namespace = "com.instagrum.local"
+    namespace = "com.instaos.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.instagrum.local"
+        applicationId = "com.instaos.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 2
-        versionName = "1.1"
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
     }
 
-    val keystore = rootProject.file("instagrum-release.jks")
-    val keystoreProperties = Properties().apply {
-        val file = rootProject.file("keystore.properties")
-        if (file.exists()) file.inputStream().use { load(it) }
+    // Release signing reads the server keystore properties at
+    // /home/ubuntu/instaos/gradle.properties (instaos.storeFile,
+    // instaos.storePassword, instaos.keyAlias, instaos.keyPassword).
+    // No passwords live in this repo. A release build FAILS if the
+    // properties file or any key is absent - there is no fallback
+    // password and no silent switch to debug signing.
+    val releaseSigningPropsFile = File("/home/ubuntu/instaos/gradle.properties")
+    val releaseRequested =
+        gradle.startParameter.taskNames.any { it.lowercase().contains("release") }
+    val releaseSigningProps = Properties().apply {
+        if (releaseSigningPropsFile.exists()) {
+            releaseSigningPropsFile.inputStream().use { load(it) }
+        } else if (releaseRequested) {
+            error("Release signing properties not found: ${releaseSigningPropsFile.path}")
+        }
     }
 
     signingConfigs {
-        if (keystore.exists()) create("release") {
-            storeFile = keystore
-            storePassword = keystoreProperties.getProperty("storePassword", "instagrum2024")
-            keyAlias = keystoreProperties.getProperty("keyAlias", "instagrum")
-            keyPassword = keystoreProperties.getProperty("keyPassword", "instagrum2024")
+        if (releaseSigningPropsFile.exists()) create("release") {
+            storeFile = file(
+                releaseSigningProps.getProperty("instaos.storeFile")
+                    ?: error("instaos.storeFile missing from ${releaseSigningPropsFile.path}")
+            )
+            storePassword = releaseSigningProps.getProperty("instaos.storePassword")
+                ?: error("instaos.storePassword missing from ${releaseSigningPropsFile.path}")
+            keyAlias = releaseSigningProps.getProperty("instaos.keyAlias")
+                ?: error("instaos.keyAlias missing from ${releaseSigningPropsFile.path}")
+            keyPassword = releaseSigningProps.getProperty("instaos.keyPassword")
+                ?: error("instaos.keyPassword missing from ${releaseSigningPropsFile.path}")
         }
     }
 
