@@ -49,15 +49,41 @@ class MainActivity : ComponentActivity() {
                 MediaProvider {
                     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                         val value = state
+                        val webSession by viewModel.session.collectAsStateWithLifecycle()
+                        val offline by viewModel.offlineMode.collectAsStateWithLifecycle()
+                        val feed by viewModel.feedState.collectAsStateWithLifecycle()
                         if (value != null) {
                             val context = this@MainActivity
-                            InstaApp(
-                                value, viewModel::dispatch, BackupActions(
-                                    export = { uri -> viewModel.exportBackup(uri, context) { toast(it) } },
-                                    import = { uri -> viewModel.importBackup(uri, context) { toast(it) } },
-                                    deleteAccount = viewModel::deleteAccount
+                            // Phase 2 login gate: no web session and not
+                            // "continue offline" → the login screen. Login
+                            // comes before onboarding: a fresh install signs
+                            // in first and the profile is adopted from
+                            // Instagram; "continue offline" restores the
+                            // old local-profile flow.
+                            if (webSession?.isLoggedIn != true && !offline) {
+                                LoginScreen(
+                                    onLoginSuccess = viewModel::completeLogin,
+                                    onContinueOffline = viewModel::continueOffline,
                                 )
-                            )
+                            } else {
+                                InstaApp(
+                                    value, viewModel::dispatch, BackupActions(
+                                        export = { uri -> viewModel.exportBackup(uri, context) { toast(it) } },
+                                        import = { uri -> viewModel.importBackup(uri, context) { toast(it) } },
+                                        deleteAccount = viewModel::deleteAccount
+                                    ),
+                                    feed = feed,
+                                    loggedIn = webSession?.isLoggedIn == true,
+                                    onRefreshFeed = { viewModel.refreshFeed(force = true) },
+                                    onLoadMoreFeed = viewModel::loadMoreFeed,
+                                    onFeedLike = viewModel::feedLike,
+                                    onFeedSave = viewModel::feedSave,
+                                    onFeedComment = { post, text, parentId ->
+                                        viewModel.feedAddComment(post, text, parentId)
+                                    },
+                                    onOpenLogin = viewModel::showLogin,
+                                )
+                            }
                             if (error != null) AlertDialog(
                                 onDismissRequest = {},
                                 title = { Text("Couldn't save changes") },

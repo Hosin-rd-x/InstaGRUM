@@ -66,7 +66,18 @@ fun PostDetail(state: AppState, postId: String, onAction: (Action) -> Unit) {
 }
 
 @Composable
-private fun PostItem(state: AppState, post: Post, active: Boolean, onAction: (Action) -> Unit) {
+fun PostItem(
+    state: AppState,
+    post: Post,
+    active: Boolean,
+    onAction: (Action) -> Unit,
+    /** True for home-feed posts (multi-author, from the web session). */
+    isFeedPost: Boolean = false,
+    /** When set, like/save/comment act on the feed list instead of the local posts. */
+    onFeedLike: ((Post) -> Unit)? = null,
+    onFeedSave: ((Post) -> Unit)? = null,
+    onFeedComment: ((String, String?) -> Unit)? = null,
+) {
     var comments by rememberSaveable(post.id) { mutableStateOf(false) }
     var controls by rememberSaveable(post.id) { mutableStateOf(false) }
     var fullScreen by rememberSaveable(post.id) { mutableStateOf(false) }
@@ -79,28 +90,50 @@ private fun PostItem(state: AppState, post: Post, active: Boolean, onAction: (Ac
             showHeart = true; delay(650); showHeart = false
         }
     }
-    val like: () -> Unit =
-        { onAction(Action.LikePost(post.id)); haptic.performHapticFeedback(HapticFeedbackType.LongPress) }
+    // The author is the post's own author when present; only the signed-in
+    // user's own posts (author == null) fall back to the local profile.
+    val author = post.author
+    val authorName = author?.username ?: state.profile.username
+    val like: () -> Unit = {
+        onFeedLike?.invoke(post) ?: onAction(Action.LikePost(post.id))
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+    val likeOnly: () -> Unit = {
+        if (!post.liked) {
+            onFeedLike?.invoke(post) ?: onAction(Action.LikePost(post.id, onlyLike = true))
+        }
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            AvatarFromProfile(state.profile, Modifier.size(36.dp))
+            if (author != null) AvatarFromUserRef(author, Modifier.size(36.dp))
+            else AvatarFromProfile(state.profile, Modifier.size(36.dp))
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(state.profile.username, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(authorName, fontWeight = FontWeight.SemiBold)
+                    if (author?.verified == true) Icon(
+                        Icons.Default.Verified,
+                        "Verified account",
+                        Modifier.size(14.dp).padding(start = 3.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
                 if (post.location.isNotBlank()) Text(post.location, style = MaterialTheme.typography.labelSmall)
             }
-            IconButton(onClick = { controls = true }) { Icon(Icons.Default.MoreHoriz, "Post controls") }
+            if (!isFeedPost) IconButton(onClick = { controls = true }) {
+                Icon(Icons.Default.MoreHoriz, "Post controls")
+            }
         }
         Box(
             Modifier.fillMaxWidth().aspectRatio(if (post.media.kind == MediaKind.REEL) .7f else 1f)
                 .then(if (active) Modifier.testTag("postMedia") else Modifier)
                 .pointerInput(post.id) {
                     detectTapGestures(onDoubleTap = {
-                        onAction(Action.LikePost(post.id, onlyLike = true)); heart++
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        likeOnly(); heart++
                     })
                 }, contentAlignment = Alignment.Center
         ) {
@@ -126,12 +159,12 @@ private fun PostItem(state: AppState, post: Post, active: Boolean, onAction: (Ac
             }
         }
         Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(
+            if (!isFeedPost) Text(
                 "View insights",
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.clickable { insights = true }
             )
-            HorizontalDivider(thickness = .5.dp)
+            if (!isFeedPost) HorizontalDivider(thickness = .5.dp)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CountAction(
                     if (post.liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -151,32 +184,32 @@ private fun PostItem(state: AppState, post: Post, active: Boolean, onAction: (Ac
                 CountAction(
                     Icons.Default.Repeat,
                     "Shares",
-                    post.views / 400,
+                    post.shares,
                     LocalContentColor.current
-                ) { insights = true }
+                ) { if (!isFeedPost) insights = true }
                 Spacer(Modifier.width(18.dp))
                 Icon(
                     Icons.AutoMirrored.Filled.Send,
                     "Send post",
-                    Modifier.size(25.dp).clickable { insights = true })
+                    Modifier.size(25.dp).clickable { if (!isFeedPost) insights = true })
                 Spacer(Modifier.weight(1f))
                 Icon(
                     if (post.saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                     "Save post",
-                    Modifier.size(25.dp).clickable { onAction(Action.SavePost(post.id)) })
+                    Modifier.size(25.dp).clickable {
+                        onFeedSave?.invoke(post) ?: onAction(Action.SavePost(post.id))
+                    })
             }
             if (post.likes > 0) LikedByRow(post)
-            if (post.caption.isNotBlank()) Text("${state.profile.username}  ${post.caption}")
+            if (post.caption.isNotBlank()) Text("$authorName  ${post.caption}")
             Text(
                 formatDate(post.createdAt),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            if (state.engine.events.any { it.postId == post.id }) SmallPill("Your post is taking off ✨")
-            if (post.frozen) SmallPill("Statistics frozen")
         }
     }
-    if (comments) CommentsSheet(state, post, onAction) { comments = false }
+    if (comments) CommentsSheet(state, post, onAction, onFeedComment) { comments = false }
     if (controls) PostControls(post, onAction) { controls = false }
     if (fullScreen) FullScreenMedia(post.media) { fullScreen = false }
     if (insights) PostInsightsSheet(post) { insights = false }
@@ -255,7 +288,13 @@ private fun PostInsightsSheet(post: Post, onDismiss: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CommentsSheet(state: AppState, post: Post, onAction: (Action) -> Unit, onDismiss: () -> Unit) {
+private fun CommentsSheet(
+    state: AppState,
+    post: Post,
+    onAction: (Action) -> Unit,
+    onFeedComment: ((String, String?) -> Unit)? = null,
+    onDismiss: () -> Unit,
+) {
     var input by rememberSaveable { mutableStateOf("") }
     var replyId by rememberSaveable { mutableStateOf<String?>(null) }
     var person by remember { mutableStateOf<FakePerson?>(null) }
@@ -376,7 +415,9 @@ private fun CommentsSheet(state: AppState, post: Post, onAction: (Action) -> Uni
                 IconButton(
                     enabled = input.isNotBlank(),
                     onClick = {
-                        onAction(Action.AddComment(post.id, input, replyId)); input = ""; replyId = null
+                        onFeedComment?.invoke(input, replyId)
+                            ?: onAction(Action.AddComment(post.id, input, replyId))
+                        input = ""; replyId = null
                     }) { Icon(Icons.AutoMirrored.Filled.Send, "Post comment") }
             }
         }
@@ -388,7 +429,6 @@ private fun CommentsSheet(state: AppState, post: Post, onAction: (Action) -> Uni
 @Composable
 private fun PostControls(post: Post, onAction: (Action) -> Unit, onDismiss: () -> Unit) {
     var delete by remember { mutableStateOf(false) }
-    var frozen by rememberSaveable(post.id) { mutableStateOf(post.frozen) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(20.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
@@ -406,26 +446,6 @@ private fun PostControls(post: Post, onAction: (Action) -> Unit, onDismiss: () -
                     )
                 },
                 modifier = Modifier.clickable { onAction(Action.SavePost(post.id)); onDismiss() }
-            )
-            ListItem(
-                headlineContent = { Text(if (frozen) "Resume activity on this post" else "Pause activity on this post") },
-                leadingContent = { Icon(if (frozen) Icons.Default.PlayArrow else Icons.Default.Pause, null) },
-                trailingContent = {
-                    Switch(
-                        frozen,
-                        {
-                            frozen = it; onAction(
-                            Action.PostStats(
-                                post.id,
-                                post.likes,
-                                post.commentCount,
-                                post.views,
-                                it,
-                                post.viralPotential
-                            )
-                        )
-                        })
-                }
             )
             ListItem(
                 headlineContent = { Text("Delete post", color = MaterialTheme.colorScheme.error) },

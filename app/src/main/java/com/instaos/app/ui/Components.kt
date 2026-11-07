@@ -13,6 +13,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -133,6 +134,24 @@ fun AvatarFromProfile(profile: Profile, modifier: Modifier = Modifier.size(86.dp
 }
 
 @Composable
+fun AvatarFromUserRef(user: UserRef, modifier: Modifier = Modifier.size(36.dp)) {
+    Box(modifier.clip(CircleShape)) {
+        if (user.avatarUrl.isNotBlank()) MediaContent(Media(path = user.avatarUrl), Modifier.fillMaxSize())
+        else Box(
+            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.Person,
+                "Profile photo",
+                Modifier.fillMaxSize(.7f),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
 fun AnimatedNumber(value: Long, modifier: Modifier = Modifier, size: androidx.compose.ui.unit.TextUnit = 16.sp, uppercase: Boolean = false) {
     AnimatedContent(
         formatCount(value, uppercase),
@@ -187,12 +206,18 @@ fun SectionTitle(title: String, action: String? = null, onAction: (() -> Unit)? 
     }
 }
 
+/**
+ * Bottom navigation, iOS Instagram 454.1 order (phase 2):
+ * Home → Reels → DMs → Search → Profile. Create moved out of the bar to
+ * the "+" at the top-left of the Home/Profile headers. The old bar had
+ * Activity / Create / Profile and its Create icon was a no-op (it set a
+ * tab no route handled). The floating translucent capsule restyle is
+ * phase 3 — this phase gets the order and the routing right.
+ */
 @Composable
 fun BottomNav(state: AppState, onAction: (Action) -> Unit) {
-    val selected = state.session.tab
-    val newFollowers = (state.profile.followers - state.acknowledgedFollowers).coerceAtLeast(0)
-    val newLikes = (state.posts.sumOf { it.likes } - state.acknowledgedLikes).coerceAtLeast(0)
-    val totalNew = newFollowers + newLikes
+    val route = Route.fromUiSession(state.session)
+    val selected = route.bottomTab()
     Surface(color = MaterialTheme.colorScheme.background) {
         Column {
             HorizontalDivider(thickness = .5.dp)
@@ -201,40 +226,40 @@ fun BottomNav(state: AppState, onAction: (Action) -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 listOf(
-                    "notifications" to Icons.Default.FavoriteBorder,
-                    "create" to Icons.Default.AddBox,
-                    "profile" to Icons.Default.Person
-                ).forEach { (tab, icon) ->
+                    Triple(Route.Home, "Home", Icons.Outlined.Home to Icons.Filled.Home),
+                    Triple(Route.Reels, "Reels", Icons.Outlined.PlayCircle to Icons.Filled.PlayCircle),
+                    Triple(Route.DmInbox, "Direct messages", Icons.Outlined.Send to Icons.Filled.Send),
+                    Triple(Route.Search, "Search", Icons.Outlined.Search to Icons.Filled.Search),
+                    Triple(Route.Profile, "Profile", Icons.Outlined.Person to Icons.Filled.Person),
+                ).forEach { (tab, label, icons) ->
+                    val active = selected == tab
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        IconButton(onClick = {
-                            onAction(Action.Navigate(tab = tab))
-                            if (tab == "notifications") onAction(Action.ReadEvents)
-                        }) {
+                        IconButton(onClick = { onAction(Action.NavigateRoute(tab)) }) {
                             Icon(
-                                icon,
-                                tab,
+                                if (active) icons.second else icons.first,
+                                label,
                                 Modifier.size(25.dp),
-                                tint = if (selected == tab) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                                tint = if (active) MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-
-                        AnimatedContent(
-                            targetState = if (tab == "notifications") totalNew else 0L,
-                            transitionSpec = { scaleIn(spring(dampingRatio = .5f)) + fadeIn() togetherWith scaleOut() + fadeOut() },
-                            label = "new-activity",
-                            modifier = Modifier.align(Alignment.Center).offset(x = 15.dp, y = (-11).dp)
-                        ) { count ->
-                            if (count > 0) Text(
-                                "+${formatCount(count)}",
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center,
-                                maxLines = 1,
-                                modifier = Modifier
+                        // Unread DM badge (from real DM state; 0 until phase 3 loads the inbox).
+                        if (tab == Route.DmInbox && state.dm.unreadTotal > 0) {
+                            Box(
+                                Modifier.align(Alignment.Center).offset(x = 15.dp, y = (-11).dp)
                                     .background(HeartColor, RoundedCornerShape(50))
-                                    .padding(horizontal = 5.dp, vertical = 2.dp)
-                            )
+                                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    formatCount(state.dm.unreadTotal.toLong()),
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1
+                                )
+                            }
                         }
                     }
                 }

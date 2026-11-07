@@ -25,6 +25,32 @@ object StateReducer {
         )
         return when (action) {
             is Action.SwitchAccount, Action.CreateAccount -> s
+            is Action.NavigateRoute -> s.copy(
+                session = action.route.toUiSession(s.session),
+                dm = when (val route = action.route) {
+                    is Route.DmThread -> s.dm.copy(openThreadId = route.threadId)
+                    Route.DmInbox -> s.dm.copy(openThreadId = null)
+                    else -> s.dm
+                },
+            )
+            is Action.OpenDm -> s.copy(
+                session = (if (action.threadId == null) Route.DmInbox else Route.DmThread(action.threadId))
+                    .toUiSession(s.session),
+                dm = s.dm.copy(openThreadId = action.threadId),
+            )
+            is Action.LoginCompleted -> s.copy(
+                profile = action.profile,
+                profileCreated = true,
+                session = UiSession(),
+                accounts = s.accounts.filterNot { it.id == s.activeAccountId } + AccountSummary(
+                    s.activeAccountId,
+                    action.profile.username,
+                    action.profile.displayName,
+                    action.profile.avatar,
+                    action.profile.avatarArtwork,
+                ),
+            )
+            Action.Logout -> s.copy(session = UiSession())
             is Action.CompleteProfile -> {
                 val base = if (action.keepContent) s else InitialState.create(now)
                 base.copy(

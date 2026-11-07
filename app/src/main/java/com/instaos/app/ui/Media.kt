@@ -60,8 +60,11 @@ fun MediaContent(
     val video = media.kind != MediaKind.IMAGE && media.path.isNotBlank()
     val source = media.path.ifBlank { "file:///android_asset/photos/${media.artwork.mod(9)}.jpg" }
 
+    // Phase 2: real Instagram media arrives as https CDN URLs. Coil 2.7.0
+    // already loads https; the old allowlist rejected it outright, which
+    // is the most likely "black images" bug after the refactor.
     val uri =
-        remember(source) { Uri.parse(source).takeIf { it.scheme in listOf("file", "content", "android.resource") } }
+        remember(source) { Uri.parse(source).takeIf { it.scheme in listOf("file", "content", "android.resource", "http", "https") } }
     Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
         when {
             uri == null -> Text(

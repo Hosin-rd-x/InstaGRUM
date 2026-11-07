@@ -13,7 +13,7 @@ class UnsupportedSnapshotVersion(version: Int) :
 
 class SnapshotStore(private val directory: File) {
     private companion object {
-        const val CURRENT = 2
+        const val CURRENT = 3
     }
 
     private val file = File(directory, "instagrum-local-state.json")

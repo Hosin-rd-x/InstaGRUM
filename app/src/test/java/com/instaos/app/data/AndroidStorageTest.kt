@@ -107,11 +107,13 @@ class AndroidStorageTest {
     }
 
     @Test
-    fun applicationHasNoInternetPermission() {
+    fun applicationHasInternetPermission() {
+        // Phase 2: the app is a real web-session client, so INTERNET is
+        // required (it was deliberately absent in the offline simulator).
         val info = context.packageManager.getPackageInfo(
             context.packageName,
             android.content.pm.PackageManager.GET_PERMISSIONS
         )
-        assertFalse(info.requestedPermissions.orEmpty().contains("android.permission.INTERNET"))
+        assertTrue(info.requestedPermissions.orEmpty().contains("android.permission.INTERNET"))
     }
 }

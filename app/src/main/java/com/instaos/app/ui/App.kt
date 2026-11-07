@@ -33,41 +33,52 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
-fun InstaApp(state: AppState, onAction: (Action) -> Unit, backup: BackupActions? = null) {
+fun InstaApp(
+    state: AppState,
+    onAction: (Action) -> Unit,
+    backup: BackupActions? = null,
+    feed: FeedUiState = FeedUiState(),
+    loggedIn: Boolean = false,
+    onRefreshFeed: () -> Unit = {},
+    onLoadMoreFeed: () -> Unit = {},
+    onFeedLike: (Post) -> Unit = {},
+    onFeedSave: (Post) -> Unit = {},
+    onFeedComment: (Post, String, String?) -> Unit = { _, _, _ -> },
+    onOpenLogin: () -> Unit = {},
+) {
     if (!state.profileCreated) {
         OnboardingScreen(state, onAction); return
     }
-    val session = state.session
-    BackHandler(
-        session.openPostId != null || session.openStoryId != null || session.screen != "main" || session.tab !in listOf(
-            "home",
-            "profile"
-        )
-    ) {
-        when {
-            session.openStoryId != null -> onAction(Action.OpenStory(null))
-            session.openPostId != null -> onAction(Action.OpenPost(null))
-            else -> onAction(Action.Navigate())
+    // Typed routing (phase 2): the router switches on Route, never on raw
+    // strings, and there is no silent `else -> ProfileScreen` fallback —
+    // unknown legacy routes resolve explicitly to Home inside Route.
+    val route = Route.fromUiSession(state.session)
+    BackHandler(route != Route.Home && route != Route.Profile) {
+        when (route) {
+            is Route.StoryViewer -> onAction(Action.OpenStory(null))
+            is Route.PostDetail -> onAction(Action.OpenPost(null))
+            else -> onAction(Action.NavigateRoute(Route.Home))
         }
     }
-    val route = when {
-        session.openStoryId != null -> "story:${session.openStoryId}"
-        session.openPostId != null -> "post:${session.openPostId}"
-        session.screen != "main" -> session.screen
-        else -> session.tab
-    }
     AnimatedContent(route, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "navigation") { destination ->
-        when {
-            destination.startsWith("story:") -> StoryViewer(state, destination.removePrefix("story:"), onAction)
-            destination.startsWith("post:") -> PostDetail(state, destination.removePrefix("post:"), onAction)
-            destination == "settings" -> SettingsScreen(state, onAction, backup)
-            destination == "create" -> CreateScreen(state, onAction)
-            destination == "live" -> LiveScreen(state, onAction)
-            destination == "history" -> LiveHistory(state, onAction)
-            destination == "archive" -> StoryArchive(state, onAction)
-            destination == "reels" || destination == "explore" -> ReelsScreen(state, onAction)
-            destination == "notifications" -> NotificationsScreen(state, onAction)
-            else -> ProfileScreen(state, onAction)
+        when (destination) {
+            is Route.StoryViewer -> StoryViewer(state, destination.storyId, onAction)
+            is Route.PostDetail -> PostDetail(state, destination.postId, onAction)
+            Route.Settings -> SettingsScreen(state, onAction, backup)
+            Route.Create -> CreateScreen(state, onAction)
+            Route.Live -> LiveScreen(state, onAction)
+            Route.LiveHistory -> LiveHistory(state, onAction)
+            Route.Archive -> StoryArchive(state, onAction)
+            Route.Reels -> ReelsScreen(state, onAction)
+            Route.Notifications -> NotificationsScreen(state, onAction)
+            Route.Home -> HomeFeedScreen(
+                state, feed, loggedIn, onAction,
+                onRefreshFeed, onLoadMoreFeed, onFeedLike, onFeedSave, onFeedComment, onOpenLogin,
+            )
+            Route.DmInbox -> DmPlaceholderScreen(state, onAction)
+            is Route.DmThread -> DmPlaceholderScreen(state, onAction)
+            Route.Search -> SearchPlaceholderScreen(state, onAction)
+            Route.Profile -> ProfileScreen(state, onAction)
         }
     }
 }

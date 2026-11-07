@@ -51,8 +51,11 @@ class AppFlowsTest {
     fun onboardingThenCreatePostThenLikeAndComment() {
         launch()
         completeOnboarding()
+        // Phase 2 nav: Home is the default tab now; the profile lives
+        // under the Profile tab, and Create is the "+" top-left.
+        compose.onNodeWithContentDescription("Profile").performClick()
         compose.onNodeWithText("my.world").assertIsDisplayed()
-        compose.onNodeWithContentDescription("create").performClick()
+        compose.onNodeWithContentDescription("Create content").performClick()
         compose.onNodeWithText("POST").performClick()
 
         compose.runOnIdle {
@@ -78,6 +81,7 @@ class AppFlowsTest {
     fun chooseSlowGrowthPaceFromSettings() {
         launch()
         completeOnboarding()
+        compose.onNodeWithContentDescription("Profile").performClick()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithTag("settingsList").performScrollToNode(hasTestTag("pace-SLOW"))
         compose.onNodeWithTag("pace-SLOW").performClick()
@@ -118,7 +122,7 @@ class AppFlowsTest {
     fun liveStartsFromCreatorAndShowsEmptyRoomMessage() {
         launch()
         completeOnboarding()
-        compose.onNodeWithContentDescription("create").performClick()
+        compose.onNodeWithContentDescription("Create content").performClick()
         compose.onNodeWithText("LIVE").performClick()
         compose.runOnIdle {
             dispatch(

@@ -58,6 +58,14 @@ data class Post(
     val comments: List<Comment> = emptyList(),
     val liked: Boolean = false,
     val saved: Boolean = false,
+    /** Real share count from the server (0 until the API returns one). */
+    val shares: Long = 0,
+    /**
+     * The post's author. Phase 2: real feed posts carry their author here.
+     * Null means "the signed-in user's own post" (the old implicit author);
+     * UI must render `author ?: state.profile` and never assume otherwise.
+     */
+    val author: UserRef? = null,
     val viralPotential: Int = 35,
     val frozen: Boolean = false,
     val viralUntil: Double = 0.0,
@@ -215,6 +223,8 @@ data class UiSession(
     val gridIndex: Int = 0,
     val gridOffset: Int = 0,
     val storyHighlight: String = "",
+    /** Open DM thread id for [Route.DmThread]; null means the inbox. */
+    val openDmThreadId: String? = null,
 )
 
 @Serializable
@@ -264,4 +274,6 @@ data class AppState(
     val acknowledgedFollowers: Long = 0L,
     val acknowledgedLikes: Long = 0L,
     val lastSimulationAt: Long = 0L,
+    /** Direct-message state (phase 2 models; screens arrive in phase 3). */
+    val dm: DmState = DmState(),
 )

@@ -74,10 +74,19 @@ fun ReelsScreen(state: AppState, onAction: (Action) -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        AvatarFromProfile(
+                        val reelAuthor = post.author
+                        if (reelAuthor != null) AvatarFromUserRef(
+                            reelAuthor,
+                            Modifier.size(32.dp)
+                        ) else AvatarFromProfile(
                             state.profile,
                             Modifier.size(32.dp)
-                        ); Text("  ${state.profile.username}", color = Color.White, fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            "  ${reelAuthor?.username ?: state.profile.username}",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                     Text(post.caption, color = Color.White, maxLines = 3)
                     Text(

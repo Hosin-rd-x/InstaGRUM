@@ -2,6 +2,14 @@ package com.instaos.app.model
 
 sealed interface Action {
     data class Navigate(val screen: String = "main", val tab: String = "home") : Action
+    /** Typed navigation (phase 2). Prefer this over the string [Navigate]. */
+    data class NavigateRoute(val route: Route) : Action
+    /** Open the DM inbox (`threadId == null`) or one thread by `thread_id`. */
+    data class OpenDm(val threadId: String?) : Action
+    /** A web login finished: adopt the Instagram profile, mark signed in. */
+    data class LoginCompleted(val profile: Profile) : Action
+    /** Sign out of the web session (local profile is kept). */
+    data object Logout : Action
     data class SwitchAccount(val id: String) : Action
     data object CreateAccount : Action
     data class OpenPost(val id: String?) : Action
