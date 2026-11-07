@@ -1,8 +1,19 @@
 package com.instaos.app.model
 
+/**
+ * User intents (phase 3).
+ *
+ * The simulation-era actions are gone with the engine: ChooseGrowth,
+ * SetSeed, Viral/EndViral, PostStats, AccountStats, AddFollowers, AddViews,
+ * StoryStats, ReadEvents, ResetStatistics, OpenActivity, StartLive /
+ * StopLive / LiveLike / LiveHype / LiveDehype / LiveComment, CompleteProfile
+ * (onboarding is replaced by the WebView login), Follow (no real user lists
+ * in v1). Network results (feed, DM, search) arrive through the ViewModel,
+ * which dispatches the `Dm*Loaded` / `AddStories` actions below.
+ */
 sealed interface Action {
     data class Navigate(val screen: String = "main", val tab: String = "home") : Action
-    /** Typed navigation (phase 2). Prefer this over the string [Navigate]. */
+    /** Typed navigation. Prefer this over the string [Navigate]. */
     data class NavigateRoute(val route: Route) : Action
     /** Open the DM inbox (`threadId == null`) or one thread by `thread_id`. */
     data class OpenDm(val threadId: String?) : Action
@@ -18,22 +29,14 @@ sealed interface Action {
     data class StoryProgress(val progress: Float) : Action
     data class GridPosition(val index: Int, val offset: Int, val tab: Int) : Action
     data class EditProfile(val profile: Profile) : Action
-    data class CompleteProfile(val profile: Profile, val keepContent: Boolean = true) : Action
-    data class ChooseGrowth(val preset: GrowthPreset) : Action
-    data class OpenActivity(val id: String) : Action
-    data class SaveSettings(val settings: SimulationSettings) : Action
+    data class SaveSettings(val settings: UiSettings) : Action
     data class SaveDraft(val draft: CreationDraft) : Action
-    data class StoryStats(val id: String, val views: Long, val targetViews: Long) : Action
-    data class SetSeed(val seed: Long) : Action
-    data class CreatePost(
-        val media: Media, val caption: String, val location: String,
-        val likes: Long, val comments: Long, val views: Long, val viralPotential: Int
-    ) : Action
-
+    /** Create a local post (stays on this device; posting to Instagram is not in v1). */
+    data class CreatePost(val media: Media, val caption: String, val location: String) : Action
+    /** Create a local story (stays on this device). */
     data class CreateStory(
         val media: Media,
         val caption: String,
-        val targetViews: Long,
         val highlight: String,
         val overlay: StoryOverlay = StoryOverlay()
     ) : Action
@@ -46,28 +49,16 @@ sealed interface Action {
     data class StoryReply(val id: String, val text: String) : Action
     data class Highlight(val id: String, val name: String) : Action
     data class DeleteStory(val id: String) : Action
-    data class Follow(val personId: String) : Action
-    data class PostStats(
-        val id: String,
-        val likes: Long,
-        val comments: Long,
-        val views: Long,
-        val frozen: Boolean,
-        val potential: Int
-    ) : Action
-
-    data class AccountStats(val followers: Long, val following: Long, val visits: Long) : Action
-    data class AddFollowers(val count: Long) : Action
-    data class AddViews(val id: String, val count: Long) : Action
-    data class Viral(val id: String, val strength: Double = 18.0) : Action
-    data class EndViral(val id: String? = null) : Action
-    data class StartLive(val config: LiveConfig) : Action
-    data object StopLive : Action
-    data object LiveLike : Action
-    data object LiveHype : Action
-    data object LiveDehype : Action
-    data class LiveComment(val text: String) : Action
-    data object ReadEvents : Action
-    data object Refresh : Action
-    data object ResetStatistics : Action
+    /** Stories loaded from the stories tray (other people's, real data). */
+    data class AddStories(val stories: List<Story>) : Action
+    /** The DM inbox was loaded from the web session. */
+    data class DmInboxLoaded(val threads: List<DmThread>) : Action
+    /** One DM thread was loaded (messages newest-first, capped by the loader). */
+    data class DmThreadLoaded(val thread: DmThread, val messages: List<DmMessage>) : Action
+    /** Optimistic local append while a message is sending. */
+    data class DmMessageAppended(val message: DmMessage) : Action
+    /** Replace an optimistic message (by its temp id) with the sent/failed one. */
+    data class DmMessageUpdated(val threadId: String, val tempId: String, val message: DmMessage) : Action
+    /** The user opened a thread: clear its unread count. */
+    data class DmThreadRead(val threadId: String) : Action
 }

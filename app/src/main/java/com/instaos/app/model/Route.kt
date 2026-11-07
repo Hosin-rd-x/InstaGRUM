@@ -1,9 +1,7 @@
 package com.instaos.app.model
 
-import kotlinx.serialization.Serializable
-
 /**
- * Typed navigation destinations (phase 2, audit §8 step 1).
+ * Typed navigation destinations (phase 2, extended in phase 3).
  *
  * The old navigation was two raw strings in [UiSession] (`tab` / `screen`).
  * Any typo — or any route the router did not know — silently fell through
@@ -14,6 +12,10 @@ import kotlinx.serialization.Serializable
  *
  * Unknown legacy strings map explicitly to [Home] — never silently to
  * Profile — and [Route.fromUiSession] is the only place that decision lives.
+ *
+ * Phase 3: the Live routes are gone (real IG Live needs RTMP streaming —
+ * out of scope for a web-session client), and the old "notifications"
+ * screen string now means the honest Activity screen.
  */
 sealed interface Route {
     data object Home : Route
@@ -24,8 +26,6 @@ sealed interface Route {
     data object Profile : Route
     data object Settings : Route
     data object Create : Route
-    data object Live : Route
-    data object LiveHistory : Route
     data object Archive : Route
     data object Notifications : Route
     data class PostDetail(val postId: String) : Route
@@ -41,8 +41,8 @@ sealed interface Route {
             return when (session.screen) {
                 "settings" -> Settings
                 "create" -> Create
-                "live" -> Live
-                "history" -> LiveHistory
+                // "live" / "history" belonged to the deleted Live screens.
+                "live", "history" -> Home
                 "archive" -> Archive
                 "reels", "explore" -> Reels
                 "notifications" -> Notifications
@@ -90,8 +90,6 @@ fun Route.toUiSession(previous: UiSession = UiSession()): UiSession = when (this
     Route.Search -> UiSession(tab = "search", screen = "search")
     Route.Settings -> UiSession(tab = previous.tab, screen = "settings")
     Route.Create -> UiSession(tab = previous.tab, screen = "create")
-    Route.Live -> UiSession(tab = previous.tab, screen = "live")
-    Route.LiveHistory -> UiSession(tab = previous.tab, screen = "history")
     Route.Archive -> UiSession(tab = previous.tab, screen = "archive")
     Route.Notifications -> UiSession(tab = "notifications", screen = "notifications")
     is Route.PostDetail -> previous.copy(openPostId = postId)

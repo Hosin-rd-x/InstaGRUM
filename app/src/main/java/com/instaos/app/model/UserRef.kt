@@ -4,10 +4,8 @@ import kotlinx.serialization.Serializable
 
 /**
  * A real person (or account) on Instagram, as returned by the web session.
- *
- * This replaces [FakePerson] as the author type for real data. [FakePerson]
- * still exists for the simulation-era Comment/person plumbing that phase 3
- * deletes; new code should use [UserRef].
+ * This is the only person type left: the simulation-era [FakePerson] is
+ * deleted in phase 3, and [Comment.person] is a [UserRef] now.
  */
 @Serializable
 data class UserRef(
@@ -27,14 +25,4 @@ fun Profile.toUserRef(): UserRef = UserRef(
     displayName = displayName,
     avatarUrl = avatar,
     verified = verified,
-)
-
-fun UserRef.toFakePerson(): FakePerson = FakePerson(
-    id = id,
-    username = username,
-    displayName = displayName,
-    avatar = avatarUrl,
-    verified = verified,
-    followed = followed,
-    followsYou = followsYou,
 )

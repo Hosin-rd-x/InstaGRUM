@@ -115,10 +115,7 @@ class AppRepository(private val context: Context) {
                 state.posts.forEach { add(it.media.path) }
                 state.stories.forEach { add(it.media.path); add(it.overlay.sticker) }
                 add(state.profile.avatar)
-                state.liveHistory.forEach { add(it.config.thumbnail.path) }
-                state.activeLive?.let { add(it.config.thumbnail.path) }
                 add(state.draft.media.path)
-                add(state.draft.liveConfig.thumbnail.path)
             }
         }.mapNotNull { path -> path.takeIf { it.isNotBlank() }?.substringAfterLast('/') }.toSet()
         directory.listFiles().orEmpty().count { file ->
@@ -144,7 +141,6 @@ class AppRepository(private val context: Context) {
                 state.profile.username,
                 state.profile.displayName,
                 state.profile.avatar,
-                state.profile.avatarArtwork
             )
         }.sortedWith(compareByDescending<AccountSummary> { it.id == active }.thenBy { it.username })
     }
