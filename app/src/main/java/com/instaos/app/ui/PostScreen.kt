@@ -1,5 +1,6 @@
 package com.instaos.app.ui
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.spring
@@ -9,8 +10,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
-import androidx.compose.foundation.pager.VerticalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -24,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -32,17 +32,29 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.instaos.app.model.*
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.drop
 
+/**
+ * Post detail (phase 3): a REAL post permalink — one post and its
+ * comments — not the old LazyColumn of every own post that pretended to
+ * be a feed. The author comes from `post.author` (feed) or the local
+ * profile (own post). No fabricated counts anywhere: shares are the real
+ * server count (0 until the API returns one), the "Liked by" row is just
+ * the real like count (the simulation's `sampledLikers` faces are gone),
+ * and the Send icon shares the real instagram.com link when the post has
+ * a shortcode — it is hidden for local-only posts that have no link.
+ */
 @Composable
-fun PostDetail(state: AppState, postId: String, onAction: (Action) -> Unit) {
-    val start = state.posts.indexOfFirst { it.id == postId }.coerceAtLeast(0)
-    if (state.posts.isEmpty()) {
+fun PostDetail(
+    state: AppState,
+    postId: String,
+    onAction: (Action) -> Unit,
+    feedPosts: List<Post> = emptyList(),
+) {
+    val post = state.posts.find { it.id == postId }
+        ?: feedPosts.find { it.id == postId }
+    if (post == null) {
         LaunchedEffect(postId) { onAction(Action.OpenPost(null)) }; return
     }
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = start)
-
     Scaffold(topBar = {
         ScreenHeader(
             "Posts",
@@ -50,16 +62,11 @@ fun PostDetail(state: AppState, postId: String, onAction: (Action) -> Unit) {
         )
     }) { padding ->
         LazyColumn(
-            state = listState,
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(bottom = 36.dp)
         ) {
-            itemsIndexed(state.posts, key = { _, post -> post.id }) { index, post ->
-                val isActive = index == listState.firstVisibleItemIndex || post.id == postId
-                PostItem(state, post, isActive, onAction)
-                Spacer(Modifier.height(16.dp))
-                HorizontalDivider(color = Color(0xFF1E1E1E), thickness = 0.8.dp)
-                Spacer(Modifier.height(6.dp))
+            item {
+                PostItem(state, post, true, onAction)
             }
         }
     }
@@ -85,6 +92,7 @@ fun PostItem(
     var heart by remember(post.id) { mutableIntStateOf(0) }
     var showHeart by remember(post.id) { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
     LaunchedEffect(heart) {
         if (heart > 0) {
             showHeart = true; delay(650); showHeart = false
@@ -103,6 +111,17 @@ fun PostItem(
             onFeedLike?.invoke(post) ?: onAction(Action.LikePost(post.id, onlyLike = true))
         }
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+    val shareLink: () -> Unit = {
+        if (post.shortcode.isNotBlank()) {
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, "https://www.instagram.com/p/${post.shortcode}/")
+            }
+            runCatching {
+                context.startActivity(Intent.createChooser(intent, "Share post"))
+            }
+        }
     }
     Column(Modifier.fillMaxWidth()) {
         Row(
@@ -188,10 +207,10 @@ fun PostItem(
                     LocalContentColor.current
                 ) { if (!isFeedPost) insights = true }
                 Spacer(Modifier.width(18.dp))
-                Icon(
+                if (post.shortcode.isNotBlank()) Icon(
                     Icons.AutoMirrored.Filled.Send,
-                    "Send post",
-                    Modifier.size(25.dp).clickable { if (!isFeedPost) insights = true })
+                    "Share post",
+                    Modifier.size(25.dp).clickable(onClick = shareLink))
                 Spacer(Modifier.weight(1f))
                 Icon(
                     if (post.saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
@@ -200,7 +219,11 @@ fun PostItem(
                         onFeedSave?.invoke(post) ?: onAction(Action.SavePost(post.id))
                     })
             }
-            if (post.likes > 0) LikedByRow(post)
+            if (post.likes > 0) Text(
+                "${formatCount(post.likes)} likes",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
             if (post.caption.isNotBlank()) Text("$authorName  ${post.caption}")
             Text(
                 formatDate(post.createdAt),
@@ -236,30 +259,6 @@ private fun CountAction(
     }
 }
 
-@Composable
-private fun LikedByRow(post: Post) {
-    val faces = post.sampledLikers.take(3)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (faces.isNotEmpty()) {
-            Box(Modifier.width((18 * (faces.size - 1) + 26).dp).height(26.dp)) {
-                faces.forEachIndexed { index, person ->
-                    Avatar(
-                        person,
-                        Modifier.size(26.dp).offset(x = (index * 18).dp)
-                            .border(1.5.dp, MaterialTheme.colorScheme.background, CircleShape)
-                    )
-                }
-            }
-            Spacer(Modifier.width(10.dp))
-        }
-        val name = faces.firstOrNull()?.username
-        Text(
-            if (name != null) "Liked by $name and others" else "${formatCount(post.likes)} likes",
-            style = MaterialTheme.typography.bodyMedium
-        )
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PostInsightsSheet(post: Post, onDismiss: () -> Unit) {
@@ -278,7 +277,7 @@ private fun PostInsightsSheet(post: Post, onDismiss: () -> Unit) {
             val rate = if (post.views > 0) post.likes.toDouble() / post.views * 100 else 0.0
             Text("Engagement rate: ${String.format(java.util.Locale.US, "%.1f", rate)}%")
             Text(
-                "Shared with your followers and through recommendations.",
+                "Counts from this device only — this post was created here, not on Instagram.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -297,7 +296,6 @@ private fun CommentsSheet(
 ) {
     var input by rememberSaveable { mutableStateOf("") }
     var replyId by rememberSaveable { mutableStateOf<String?>(null) }
-    var person by remember { mutableStateOf<FakePerson?>(null) }
     val roots =
         post.comments.filter { it.parentId == null || post.comments.none { parent -> parent.id == it.parentId } }
     val ordered = remember(post.comments) {
@@ -322,8 +320,15 @@ private fun CommentsSheet(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.align(Alignment.CenterHorizontally)
             )
+            // Honest count: the feed only carries the comments Instagram
+            // sent with the post, so say how many are loaded when the
+            // server total is bigger. No "local sample" fiction.
             Text(
-                "${formatCount(post.commentCount)} total · showing a local sample",
+                if (ordered.size < post.commentCount) {
+                    "${formatCount(post.commentCount)} total · ${ordered.size} loaded"
+                } else {
+                    "${formatCount(post.commentCount)} total"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(16.dp, 8.dp)
@@ -338,9 +343,10 @@ private fun CommentsSheet(
                             bottom = 10.dp
                         )
                     ) {
-                        Avatar(
+                        AvatarFromUserRef(
                             comment.person,
-                            Modifier.size(34.dp).clickable { if (!comment.own) person = comment.person })
+                            Modifier.size(34.dp)
+                        )
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -348,10 +354,10 @@ private fun CommentsSheet(
                                     comment.person.username,
                                     fontWeight = FontWeight.SemiBold,
                                     style = MaterialTheme.typography.labelLarge,
-                                    modifier = Modifier.clickable { if (!comment.own) person = comment.person })
+                                )
                                 if (comment.person.verified) Icon(
                                     Icons.Default.Verified,
-                                    "Simulated verified badge",
+                                    "Verified account",
                                     Modifier.size(13.dp),
                                     tint = MaterialTheme.colorScheme.primary
                                 )
@@ -422,7 +428,6 @@ private fun CommentsSheet(
             }
         }
     }
-    person?.let { PersonSheet(state, it, onAction) { person = null } }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -457,7 +462,7 @@ private fun PostControls(post: Post, onAction: (Action) -> Unit, onDismiss: () -
     }
     if (delete) ConfirmAction(
         "Delete post?",
-        "It will be removed from your profile along with its comments and activity.",
+        "It will be removed from your profile along with its comments.",
         { onAction(Action.DeletePost(post.id)); onDismiss() },
         { delete = false })
 }

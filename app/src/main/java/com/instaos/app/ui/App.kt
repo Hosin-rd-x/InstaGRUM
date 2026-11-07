@@ -17,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -29,7 +28,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.instaos.app.model.*
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
@@ -45,39 +43,70 @@ fun InstaApp(
     onFeedSave: (Post) -> Unit = {},
     onFeedComment: (Post, String, String?) -> Unit = { _, _, _ -> },
     onOpenLogin: () -> Unit = {},
+    dmLoading: Boolean = false,
+    dmError: String? = null,
+    search: SearchUiState = SearchUiState(),
+    storyError: String? = null,
+    onRefreshDmInbox: () -> Unit = {},
+    onLoadDmThread: (String) -> Unit = {},
+    onSendDm: (String, String) -> Unit = { _, _ -> },
+    onRetryDm: (String, DmMessage) -> Unit = { _, _ -> },
+    onDmVisible: (String?) -> Unit = {},
+    onDmHidden: () -> Unit = {},
+    onSearch: (String) -> Unit = {},
+    onClearSearch: () -> Unit = {},
+    onOpenTrayStory: (StoryTrayItem) -> Unit = {},
+    onClearStoryError: () -> Unit = {},
+    onLogout: () -> Unit = {},
 ) {
-    if (!state.profileCreated) {
-        OnboardingScreen(state, onAction); return
-    }
+    // No onboarding gate: the login gate lives in MainActivity (WebView
+    // sign-in); the local profile is created from the web session.
     // Typed routing (phase 2): the router switches on Route, never on raw
     // strings, and there is no silent `else -> ProfileScreen` fallback —
     // unknown legacy routes resolve explicitly to Home inside Route.
     val route = Route.fromUiSession(state.session)
+    // Poll DMs only while an inbox/thread screen is visible.
+    LaunchedEffect(route) {
+        when (route) {
+            is Route.DmThread -> onDmVisible(route.threadId)
+            Route.DmInbox -> onDmVisible(null)
+            else -> onDmHidden()
+        }
+    }
     BackHandler(route != Route.Home && route != Route.Profile) {
         when (route) {
             is Route.StoryViewer -> onAction(Action.OpenStory(null))
             is Route.PostDetail -> onAction(Action.OpenPost(null))
+            is Route.DmThread -> onAction(Action.NavigateRoute(Route.DmInbox))
             else -> onAction(Action.NavigateRoute(Route.Home))
         }
     }
     AnimatedContent(route, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "navigation") { destination ->
         when (destination) {
             is Route.StoryViewer -> StoryViewer(state, destination.storyId, onAction)
-            is Route.PostDetail -> PostDetail(state, destination.postId, onAction)
-            Route.Settings -> SettingsScreen(state, onAction, backup)
+            is Route.PostDetail -> PostDetail(state, destination.postId, onAction, feedPosts = feed.posts)
+            Route.Settings -> SettingsScreen(state, onAction, backup, onLogout)
             Route.Create -> CreateScreen(state, onAction)
-            Route.Live -> LiveScreen(state, onAction)
-            Route.LiveHistory -> LiveHistory(state, onAction)
             Route.Archive -> StoryArchive(state, onAction)
-            Route.Reels -> ReelsScreen(state, onAction)
-            Route.Notifications -> NotificationsScreen(state, onAction)
+            Route.Reels -> ReelsScreen(state, feed, onAction, onRefreshFeed, onFeedLike, onFeedSave)
+            Route.Notifications -> ActivityScreen(state, onAction)
             Route.Home -> HomeFeedScreen(
                 state, feed, loggedIn, onAction,
                 onRefreshFeed, onLoadMoreFeed, onFeedLike, onFeedSave, onFeedComment, onOpenLogin,
+                onOpenTrayStory, storyError, onClearStoryError,
             )
-            Route.DmInbox -> DmPlaceholderScreen(state, onAction)
-            is Route.DmThread -> DmPlaceholderScreen(state, onAction)
-            Route.Search -> SearchPlaceholderScreen(state, onAction)
+            Route.DmInbox -> DmInboxScreen(
+                state, dmLoading, dmError, loggedIn, onAction, onRefreshDmInbox, onOpenLogin
+            )
+            is Route.DmThread -> DmThreadScreen(
+                state, destination.threadId, dmLoading, dmError, onAction,
+                onLoad = { onLoadDmThread(destination.threadId) },
+                onSend = { text -> onSendDm(destination.threadId, text) },
+                onRetry = { message -> onRetryDm(destination.threadId, message) },
+            )
+            Route.Search -> SearchScreen(
+                state, search, feed, onAction, onSearch, onRefreshFeed
+            )
             Route.Profile -> ProfileScreen(state, onAction)
         }
     }
@@ -106,7 +135,6 @@ private fun AccountSwitcher(state: AppState, onAction: (Action) -> Unit, dismiss
                                     username = account.username,
                                     displayName = account.displayName,
                                     avatar = account.avatar,
-                                    avatarArtwork = account.avatarArtwork
                                 ),
                                 Modifier.size(40.dp)
                             )
@@ -170,15 +198,7 @@ fun AppScaffold(state: AppState, onAction: (Action) -> Unit, content: @Composabl
 @Composable
 private fun ProfileScreen(state: AppState, onAction: (Action) -> Unit) {
     var editOpen by rememberSaveable { mutableStateOf(false) }
-    var peopleSheet by rememberSaveable { mutableStateOf<String?>(null) }
     var accountsOpen by rememberSaveable { mutableStateOf(false) }
-    var refreshing by remember { mutableStateOf(false) }
-    LaunchedEffect(refreshing, state.lastSavedAt) {
-        if (refreshing) {
-            delay(450)
-            refreshing = false
-        }
-    }
     val profile = state.profile
     val activeStories = state.stories.filter { it.expiresAt > System.currentTimeMillis() }
     val unseenStories = activeStories.any { !it.seen }
@@ -197,18 +217,15 @@ private fun ProfileScreen(state: AppState, onAction: (Action) -> Unit) {
         else -> state.posts
     }
     AppScaffold(state, onAction) { padding ->
-        PullToRefreshBox(
-            isRefreshing = refreshing,
-            onRefresh = { refreshing = true; onAction(Action.Refresh) },
-            modifier = Modifier.fillMaxSize().padding(padding)
+        // No pull-to-refresh here: the profile is local data, and a
+        // refresh gesture that reloaded nothing would be a dead control.
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(3),
+            state = grid,
+            modifier = Modifier.fillMaxSize().padding(padding).testTag("profileGrid"),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                state = grid,
-                modifier = Modifier.fillMaxSize().testTag("profileGrid"),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Column(Modifier.padding(horizontal = 16.dp)) {
                         Row(
@@ -294,14 +311,8 @@ private fun ProfileScreen(state: AppState, onAction: (Action) -> Unit) {
                                     verticalAlignment = Alignment.Top
                                 ) {
                                     ProfileStat(state.posts.size.toLong(), "posts")
-                                    ProfileStat(
-                                        profile.followers,
-                                        "followers",
-                                        Modifier.clickable { peopleSheet = "Followers" })
-                                    ProfileStat(
-                                        state.posts.sumOf { it.likes },
-                                        "likes"
-                                    )
+                                    ProfileStat(profile.followers, "followers")
+                                    ProfileStat(profile.following, "following")
                                 }
                             }
                         }
@@ -311,29 +322,9 @@ private fun ProfileScreen(state: AppState, onAction: (Action) -> Unit) {
                             modifier = Modifier.padding(top = 12.dp)
                         )
                         Spacer(Modifier.height(12.dp))
-                        Surface(
-                            onClick = { onAction(Action.Navigate("settings")) },
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
-                                Text("Your dashboard", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    "${formatCount(state.posts.sumOf { it.views })} views in the last 30 days.",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(top = 2.dp)
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             ProfileButton("Edit profile", Modifier.weight(1f)) { editOpen = true }
                             ProfileButton("Share profile", Modifier.weight(1f)) { editOpen = true }
-                        }
-                        if (state.activeLive != null) TextButton(onClick = { onAction(Action.Navigate("live")) }) {
-                            Text("● Return to live · ${formatCount(state.activeLive.viewers.toLong())} watching")
                         }
                     }
                 }
@@ -396,7 +387,8 @@ private fun ProfileScreen(state: AppState, onAction: (Action) -> Unit) {
                         Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
                             listOf(
                                 Icons.Default.GridOn to "Posts",
-                                Icons.Default.PlayCircleOutline to "Reels"
+                                Icons.Default.PlayCircleOutline to "Reels",
+                                Icons.Default.BookmarkBorder to "Saved"
                             ).forEachIndexed { index, (icon, label) ->
                                 val active = currentTab == index
                                 Column(
@@ -443,16 +435,7 @@ private fun ProfileScreen(state: AppState, onAction: (Action) -> Unit) {
                     }
                 }
             }
-        }
     }
     if (editOpen) EditProfileDialog(profile, onAction) { editOpen = false }
     if (accountsOpen) AccountSwitcher(state, onAction) { accountsOpen = false }
-    peopleSheet?.let { label ->
-        PeopleSheet(
-            state,
-            label,
-            if (label == "Following") state.people.filter { it.followed } else state.people.filter { it.followsYou },
-            onAction
-        ) { peopleSheet = null }
-    }
 }

@@ -1,203 +1,186 @@
 package com.instaos.app.ui
 
-import android.Manifest
 import android.content.Intent
-import android.os.Build
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.instaos.app.model.*
-import com.instaos.app.notifications.LocalNotifications
-import com.instaos.app.simulation.GrowthPresets
 
+/**
+ * Settings (phase 3, rebuilt).
+ *
+ * The old screen was the simulation's control panel ("Your pace", nine
+ * growth presets, a foreground service, fake notifications). This one is
+ * the real thing: account (sign out), appearance (dark mode + accent
+ * colour), your data (backup/restore), and an honest About section. No
+ * control here does nothing — push notifications are not in this version,
+ * so there is no notifications toggle pretending otherwise.
+ */
 @Composable
-fun SettingsScreen(state: AppState, onAction: (Action) -> Unit, backup: BackupActions? = null) {
+fun SettingsScreen(
+    state: AppState,
+    onAction: (Action) -> Unit,
+    backup: BackupActions? = null,
+    onLogout: () -> Unit = {},
+) {
     val context = LocalContext.current
-    Scaffold(topBar = { ScreenHeader("Your pace", { onAction(Action.Navigate()) }) }) { padding ->
+    var confirmSignOut by remember { mutableStateOf(false) }
+    Scaffold(topBar = { ScreenHeader("Settings", { onAction(Action.Navigate()) }) }) { padding ->
         LazyColumn(
             Modifier.fillMaxSize().padding(padding).testTag("settingsList"),
             contentPadding = PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                Text(
-                    "How should your account grow?",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    "One choice for posts, stories and lives. No percentages to tune. Everything unfolds in real time, with quiet moments as well as busy ones.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            }
-            items(GrowthPresets.choices) { preset ->
-                val selected = state.settings.preset == preset
-                val color by animateColorAsState(
-                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .12f) else MaterialTheme.colorScheme.surface,
-                    label = "growth-choice"
-                )
-                Surface(
-                    onClick = { onAction(Action.ChooseGrowth(preset)) },
-                    color = color,
-                    border = BorderStroke(1.dp, if (selected) ActionBlue else MaterialTheme.colorScheme.outlineVariant),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.testTag("pace-${preset.name}")
+                Text("Account", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(GrowthPresets.label(preset), fontWeight = FontWeight.SemiBold)
-                            Text(
-                                GrowthPresets.description(preset),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-                        }
-                        if (selected) Icon(
-                            Icons.Default.CheckCircle,
-                            "Selected",
-                            tint = ActionBlue,
-                            modifier = Modifier.padding(start = 10.dp)
+                    AvatarFromProfile(state.profile, Modifier.size(48.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(state.profile.username.ifBlank { "Not signed in" }, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            state.profile.displayName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
+                OutlinedButton(
+                    onClick = { confirmSignOut = true },
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                ) { Text("Sign out") }
+                Text(
+                    "Signing out forgets the login session on this device. Your local posts and stories stay.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
             }
             item {
-                HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                ToggleSetting(
-                    "Pause activity",
-                    state.settings.paused
-                ) { onAction(Action.SaveSettings(state.settings.copy(paused = it))) }
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Text("Appearance", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                 ToggleSetting(
                     "Dark appearance",
                     state.settings.darkMode
                 ) { onAction(Action.SaveSettings(state.settings.copy(darkMode = it))) }
-                ToggleSetting(
-                    "Occasional surprises",
-                    state.settings.randomEvents
-                ) { onAction(Action.SaveSettings(state.settings.copy(randomEvents = it))) }
-                NotificationControls(state, onAction)
-                ToggleSetting(
-                    "Activity while I'm away",
-                    state.settings.backgroundActivity
-                ) { onAction(Action.SaveSettings(state.settings.copy(backgroundActivity = it))) }
-                ContinuousGrowthControls(state)
                 Text(
-                    "Periodic catch-up uses Android scheduling and may be delayed by battery settings. For second-by-second growth, keep the service above running.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    "Accent colour",
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 10.dp, bottom = 8.dp)
                 )
-                TextButton(onClick = { onAction(Action.Navigate("history")) }) { Text("Past livestreams") }
-                if (backup != null) BackupControls(state, backup)
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    listOf(
+                        Triple(AccentColor.VIOLET, AccentViolet, "Violet"),
+                        Triple(AccentColor.LIME, AccentLime, "Lime"),
+                        Triple(AccentColor.PINK, AccentPink, "Pink"),
+                        Triple(AccentColor.TEAL, AccentTeal, "Teal"),
+                    ).forEach { (accent, color, label) ->
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Box(
+                                Modifier.size(40.dp).clip(CircleShape).background(color)
+                                    .testTag("accent-$accent")
+                                    .then(
+                                        if (state.settings.accent == accent) Modifier.border(
+                                            2.dp,
+                                            MaterialTheme.colorScheme.onSurface,
+                                            CircleShape
+                                        ) else Modifier
+                                    )
+                                    .clickable { onAction(Action.SaveSettings(state.settings.copy(accent = accent))) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (state.settings.accent == accent) Icon(
+                                    Icons.Default.Check,
+                                    "Selected",
+                                    tint = if (accent == AccentColor.LIME) Color.Black else Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            item {
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Text("Notifications", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "This is a private simulation, not Instagram. Growth is research-informed but cannot predict a real account.",
-                    style = MaterialTheme.typography.bodySmall,
+                    "Push notifications aren't in this version — DMs refresh when you open them.",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 16.dp)
+                    modifier = Modifier.padding(top = 6.dp)
                 )
-                Spacer(Modifier.height(20.dp))
+            }
+            if (backup != null) item { BackupControls(state, backup) }
+            item {
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Text("About", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "InstaOS 1.1.0 — a web-session Instagram client for the test account. " +
+                        "It signs in inside Instagram's own page and reads the feed, stories, " +
+                        "profile and messages through that session. Posting, Live and push " +
+                        "notifications are not in this version.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+                Spacer(Modifier.height(12.dp))
                 Column(
                     Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        "InstaGRUM",
+                        "InstaOS",
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Text(
-                        "Built by zyrexdz",
+                        "UI base: InstaGRUM by zyrexdz (MIT)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     TextButton(onClick = {
                         runCatching {
                             context.startActivity(
-                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/zyrexdz"))
+                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/zyrexdz/InstaGRUM"))
                             )
                         }
-                    }) { Text("github.com/zyrexdz") }
+                    }) { Text("github.com/zyrexdz/InstaGRUM") }
                 }
                 Spacer(Modifier.height(12.dp))
             }
         }
     }
-}
-
-@Composable
-private fun ContinuousGrowthControls(state: AppState) {
-    val context = LocalContext.current
-    val preferences = remember { context.getSharedPreferences("growth_service", android.content.Context.MODE_PRIVATE) }
-    var running by remember { mutableStateOf(preferences.getBoolean("enabled", false)) }
-    val power = context.getSystemService(android.os.PowerManager::class.java)
-    var unrestricted by remember { mutableStateOf(power?.isIgnoringBatteryOptimizations(context.packageName) == true) }
-    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(lifecycle) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                unrestricted = power?.isIgnoringBatteryOptimizations(context.packageName) == true
-            }
-        }
-        lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
-    }
-    ToggleSetting("Keep growing while closed", running) { enabled ->
-        running = enabled
-        preferences.edit().putBoolean("enabled", enabled).apply()
-        if (enabled) LocalNotifications.startContinuous(context) else LocalNotifications.stopContinuous(context)
-        unrestricted = power?.isIgnoringBatteryOptimizations(context.packageName) == true
-    }
-    if (running && !unrestricted) Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.errorContainer
-    ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Battery optimisation will stop this", fontWeight = FontWeight.SemiBold)
-            Text(
-                "Android may end the service within minutes. Allow unrestricted battery use to keep it running.",
-                style = MaterialTheme.typography.bodySmall
-            )
-            FilledTonalButton(onClick = { requestUnrestrictedBattery(context) }) {
-                Text("Allow unrestricted battery")
-            }
-        }
-    }
-    if (running) Text(
-        "A silent notification stays in your shade while this is on. Android requires it, and it is how the app is allowed to keep running.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
-
-private fun requestUnrestrictedBattery(context: android.content.Context) {
-    val targets = listOf(
-        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-            .setData(android.net.Uri.parse("package:${context.packageName}")),
-        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-            .setData(android.net.Uri.parse("package:${context.packageName}")),
-        Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-    )
-    for (intent in targets) {
-        if (intent.resolveActivity(context.packageManager) == null) continue
-        if (runCatching { context.startActivity(intent) }.isSuccess) return
-    }
+    if (confirmSignOut) ConfirmAction(
+        "Sign out?",
+        "Your Instagram session on this device will be forgotten. You will need to sign in again to see your feed and messages.",
+        { onLogout() },
+        { confirmSignOut = false })
 }
 
 class BackupActions(
@@ -218,13 +201,13 @@ private fun BackupControls(state: AppState, backup: BackupActions) {
     HorizontalDivider(Modifier.padding(vertical = 10.dp))
     Text("Your data", fontWeight = FontWeight.SemiBold)
     Text(
-        "Your accounts stay on this device and are included in Android's backup, so an app update never affects them. Save a file as well if you want a copy you control.",
+        "Your accounts stay on this device. Save a file as well if you want a copy you control. The login session itself is never included in a backup.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilledTonalButton(
-            onClick = { save.launch("instagrum-backup.json") },
+            onClick = { save.launch("instaos-backup.json") },
             modifier = Modifier.weight(1f)
         ) { Text("Save backup") }
         FilledTonalButton(
@@ -238,7 +221,7 @@ private fun BackupControls(state: AppState, backup: BackupActions) {
     if (confirmDelete) AlertDialog(
         onDismissRequest = { confirmDelete = false },
         title = { Text("Delete this account?") },
-        text = { Text("${state.profile.username} and its posts, stories and followers are removed from this device. Your other accounts are untouched. This cannot be undone.") },
+        text = { Text("${state.profile.username} and its posts and stories are removed from this device. Your other accounts are untouched. This cannot be undone.") },
         confirmButton = {
             TextButton(onClick = { backup.deleteAccount(); confirmDelete = false }) {
                 Text("Delete", color = MaterialTheme.colorScheme.error)
@@ -246,34 +229,6 @@ private fun BackupControls(state: AppState, backup: BackupActions) {
         },
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Keep") } }
     )
-}
-
-@Composable
-fun NotificationControls(state: AppState, onAction: (Action) -> Unit) {
-    val context = LocalContext.current
-    var allowed by remember { mutableStateOf(LocalNotifications(context).allowed()) }
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        allowed = granted
-        onAction(Action.SaveSettings(state.settings.copy(notificationsEnabled = granted)))
-    }
-    ToggleSetting("Likes & follower notifications", state.settings.notificationsEnabled) { enabled ->
-        if (enabled && Build.VERSION.SDK_INT >= 33 && !LocalNotifications(context).allowed()) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        else onAction(Action.SaveSettings(state.settings.copy(notificationsEnabled = enabled)))
-    }
-    if (!allowed) TextButton(onClick = {
-        if (Build.VERSION.SDK_INT >= 33 && !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
-                context as android.app.Activity,
-                Manifest.permission.POST_NOTIFICATIONS
-            )
-        ) {
-            permission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else context.startActivity(
-            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(
-                Settings.EXTRA_APP_PACKAGE,
-                context.packageName
-            )
-        )
-    }) { Text("Allow notifications in Android") }
 }
 
 @Composable

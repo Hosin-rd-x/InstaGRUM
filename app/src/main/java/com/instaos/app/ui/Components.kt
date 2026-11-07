@@ -2,7 +2,6 @@ package com.instaos.app.ui
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,10 +21,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
@@ -55,64 +56,6 @@ fun Modifier.storyRing(unseen: Boolean, stroke: Dp = 2.5.dp): Modifier = drawBeh
     val radius = size.minDimension / 2 - width / 2
     if (unseen) drawCircle(Brush.sweepGradient(RingStops), radius, style = Stroke(width))
     else drawCircle(IgSeenRing, radius, style = Stroke(width))
-}
-
-@Composable
-fun LocalArtwork(
-    artwork: Int,
-    modifier: Modifier = Modifier,
-    rounded: Boolean = true,
-    contentDescription: String? = null,
-    showPlay: Boolean = false
-) {
-    val palettes = listOf(0xFF7796A0, 0xFFC29482, 0xFF938BA8, 0xFF8BA894, 0xFFC9AE80, 0xFF7D92BB)
-    val skin = listOf(0xFFDEAD89, 0xFFAA7351, 0xFFF1C8A9, 0xFF765040)[artwork.mod(4)]
-    Box(
-        modifier.then(if (rounded) Modifier.clip(CircleShape) else Modifier).background(Color(palettes[artwork.mod(6)]))
-    ) {
-        Canvas(Modifier.fillMaxSize()) {
-            val w = size.width;
-            val h = size.height
-            drawCircle(Color.White.copy(alpha = .15f), w * .5f, Offset(w * .8f, h * .1f))
-            drawOval(
-                Color(0xFF293946),
-                Offset(w * .12f, h * .67f),
-                androidx.compose.ui.geometry.Size(w * .8f, h * .65f)
-            )
-            drawOval(
-                Color(0xFF382C29),
-                Offset(w * .25f, h * .15f),
-                androidx.compose.ui.geometry.Size(w * .5f, h * .58f)
-            )
-            drawOval(Color(skin), Offset(w * .3f, h * .27f), androidx.compose.ui.geometry.Size(w * .4f, h * .43f))
-            drawPath(Path().apply {
-                moveTo(w * .25f, h * .4f); lineTo(w * .32f, h * .19f); lineTo(
-                w * .68f,
-                h * .18f
-            ); lineTo(w * .76f, h * .4f); lineTo(w * .55f, h * .3f); close()
-            }, Color(0xFF382C29))
-            drawCircle(Color(0xFF382C29), w * .018f, Offset(w * .42f, h * .46f))
-            drawCircle(Color(0xFF382C29), w * .018f, Offset(w * .58f, h * .46f))
-            drawLine(Color(0xFF925F52), Offset(w * .46f, h * .58f), Offset(w * .55f, h * .58f), w * .02f)
-        }
-        if (showPlay) Icon(
-            Icons.Default.PlayArrow,
-            contentDescription,
-            tint = Color.White,
-            modifier = Modifier.align(Alignment.Center)
-        )
-    }
-}
-
-@Composable
-fun Avatar(person: FakePerson?, modifier: Modifier = Modifier.size(44.dp), ring: Boolean = false) {
-    Box(
-        modifier.then(if (ring) Modifier.border(2.dp, StoryGradient, CircleShape).padding(4.dp) else Modifier)
-            .clip(CircleShape)
-    ) {
-        if (person?.avatar?.isNotBlank() == true) MediaContent(Media(path = person.avatar), Modifier.fillMaxSize())
-        else LocalArtwork(person?.colorIndex ?: 8, Modifier.fillMaxSize(), rounded = false)
-    }
 }
 
 @Composable
@@ -207,49 +150,70 @@ fun SectionTitle(title: String, action: String? = null, onAction: (() -> Unit)? 
 }
 
 /**
- * Bottom navigation, iOS Instagram 454.1 order (phase 2):
- * Home → Reels → DMs → Search → Profile. Create moved out of the bar to
- * the "+" at the top-left of the Home/Profile headers. The old bar had
- * Activity / Create / Profile and its Create icon was a no-op (it set a
- * tab no route handled). The floating translucent capsule restyle is
- * phase 3 — this phase gets the order and the routing right.
+ * Bottom navigation, iOS Instagram 454.1 order: Home → Reels → DMs →
+ * Search → Profile. Create is out of the bar (the "+" at the top-left of
+ * the Home/Profile headers).
+ *
+ * Phase 3 restyle (§1.11): a FLOATING translucent capsule instead of the
+ * pinned strip — a wide, strongly rounded pill hovering above the bottom
+ * edge, content visible through it, the selected tab behind a smaller
+ * translucent highlight. No divider, no labels, no heavy shadow. The
+ * Profile tab shows the signed-in user's avatar, like the real app.
  */
 @Composable
 fun BottomNav(state: AppState, onAction: (Action) -> Unit) {
     val route = Route.fromUiSession(state.session)
     val selected = route.bottomTab()
-    Surface(color = MaterialTheme.colorScheme.background) {
-        Column {
-            HorizontalDivider(thickness = .5.dp)
+    val isDark = MaterialTheme.colorScheme.background == Color.Black
+    val capsule = if (isDark) Color.Black.copy(alpha = 0.72f) else Color.White.copy(alpha = 0.85f)
+    val highlight = if (isDark) Color.White.copy(alpha = 0.16f) else Color.Black.copy(alpha = 0.08f)
+    Box(
+        Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = capsule,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth().height(60.dp)
+                .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(50)),
+        ) {
             Row(
-                Modifier.fillMaxWidth().navigationBarsPadding().height(56.dp),
-                verticalAlignment = Alignment.CenterVertically
+                Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                listOf(
+                val tabs = listOf(
                     Triple(Route.Home, "Home", Icons.Outlined.Home to Icons.Filled.Home),
-                    Triple(Route.Reels, "Reels", Icons.Outlined.PlayCircle to Icons.Filled.PlayCircle),
+                    Triple(Route.Reels, "Reels", Icons.Outlined.Movie to Icons.Filled.Movie),
                     Triple(Route.DmInbox, "Direct messages", Icons.Outlined.Send to Icons.Filled.Send),
                     Triple(Route.Search, "Search", Icons.Outlined.Search to Icons.Filled.Search),
-                    Triple(Route.Profile, "Profile", Icons.Outlined.Person to Icons.Filled.Person),
-                ).forEach { (tab, label, icons) ->
+                )
+                tabs.forEach { (tab, label, icons) ->
                     val active = selected == tab
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        IconButton(onClick = { onAction(Action.NavigateRoute(tab)) }) {
-                            Icon(
-                                if (active) icons.second else icons.first,
-                                label,
-                                Modifier.size(25.dp),
-                                tint = if (active) MaterialTheme.colorScheme.onSurface
-                                else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        Box(
+                            Modifier.size(48.dp).clip(RoundedCornerShape(50))
+                                .background(if (active) highlight else Color.Transparent),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            IconButton(onClick = { onAction(Action.NavigateRoute(tab)) }) {
+                                Icon(
+                                    if (active) icons.second else icons.first,
+                                    label,
+                                    Modifier.size(25.dp),
+                                    tint = if (active) MaterialTheme.colorScheme.onSurface
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
-                        // Unread DM badge (from real DM state; 0 until phase 3 loads the inbox).
+                        // Unread DM badge (from real DM state; 0 until the inbox loads).
                         if (tab == Route.DmInbox && state.dm.unreadTotal > 0) {
                             Box(
                                 Modifier.align(Alignment.Center).offset(x = 15.dp, y = (-11).dp)
                                     .background(HeartColor, RoundedCornerShape(50))
                                     .padding(horizontal = 5.dp, vertical = 2.dp),
-                                contentAlignment = Alignment.Center
+                                contentAlignment = Alignment.Center,
                             ) {
                                 Text(
                                     formatCount(state.dm.unreadTotal.toLong()),
@@ -257,9 +221,35 @@ fun BottomNav(state: AppState, onAction: (Action) -> Unit) {
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     textAlign = TextAlign.Center,
-                                    maxLines = 1
+                                    maxLines = 1,
                                 )
                             }
+                        }
+                    }
+                }
+                // Profile tab: the user's avatar (real Instagram shows it
+                // instead of a person glyph); a ring marks it selected.
+                val profileActive = selected == Route.Profile
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier.size(48.dp).clip(RoundedCornerShape(50))
+                            .background(if (profileActive) highlight else Color.Transparent),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            Modifier.size(30.dp)
+                                .then(
+                                    if (profileActive) Modifier.border(
+                                        1.5.dp,
+                                        MaterialTheme.colorScheme.onSurface,
+                                        CircleShape,
+                                    ) else Modifier
+                                )
+                                .padding(if (profileActive) 1.5.dp else 0.dp)
+                                .semantics { contentDescription = "Profile"; role = Role.Button }
+                                .clickable { onAction(Action.NavigateRoute(Route.Profile)) },
+                        ) {
+                            AvatarFromProfile(state.profile, Modifier.fillMaxSize())
                         }
                     }
                 }

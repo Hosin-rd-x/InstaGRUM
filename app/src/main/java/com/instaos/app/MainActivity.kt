@@ -1,15 +1,9 @@
 package com.instaos.app
 
-import android.Manifest
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -17,9 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.instaos.app.notifications.LocalNotifications
 import com.instaos.app.ui.*
 
 class MainActivity : ComponentActivity() {
@@ -27,39 +19,30 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleNotification(intent)
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
             val error by viewModel.error.collectAsStateWithLifecycle()
-            val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-            LaunchedEffect(state?.profileCreated) {
-                if (state?.profileCreated == true && Build.VERSION.SDK_INT >= 33) {
-                    val prefs = getSharedPreferences("permissions", MODE_PRIVATE)
-                    if (!prefs.getBoolean("notifications_asked", false)) {
-                        prefs.edit().putBoolean("notifications_asked", true).apply()
-                        if (ContextCompat.checkSelfPermission(
-                                this@MainActivity,
-                                Manifest.permission.POST_NOTIFICATIONS
-                            ) != PackageManager.PERMISSION_GRANTED
-                        ) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                }
-            }
-            InstaTheme(state?.settings?.darkMode ?: true) {
+            // Phase 3: the theme comes from the (small) UI settings —
+            // dark mode + the user's accent colour. No notification
+            // permission prompt, no background service any more.
+            InstaTheme(state?.settings?.darkMode ?: true, state?.settings?.accent) {
                 MediaProvider {
                     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                         val value = state
                         val webSession by viewModel.session.collectAsStateWithLifecycle()
                         val offline by viewModel.offlineMode.collectAsStateWithLifecycle()
                         val feed by viewModel.feedState.collectAsStateWithLifecycle()
+                        val dmLoading by viewModel.dmLoading.collectAsStateWithLifecycle()
+                        val dmError by viewModel.dmError.collectAsStateWithLifecycle()
+                        val search by viewModel.searchState.collectAsStateWithLifecycle()
+                        val storyError by viewModel.storyError.collectAsStateWithLifecycle()
                         if (value != null) {
                             val context = this@MainActivity
-                            // Phase 2 login gate: no web session and not
-                            // "continue offline" → the login screen. Login
-                            // comes before onboarding: a fresh install signs
-                            // in first and the profile is adopted from
-                            // Instagram; "continue offline" restores the
-                            // old local-profile flow.
+                            // Login gate: no web session and not "continue
+                            // offline" → the login screen. A fresh install
+                            // signs in first and the profile is adopted
+                            // from Instagram; "continue offline" shows the
+                            // app with local content only.
                             if (webSession?.isLoggedIn != true && !offline) {
                                 LoginScreen(
                                     onLoginSuccess = viewModel::completeLogin,
@@ -82,6 +65,21 @@ class MainActivity : ComponentActivity() {
                                         viewModel.feedAddComment(post, text, parentId)
                                     },
                                     onOpenLogin = viewModel::showLogin,
+                                    onLogout = viewModel::logout,
+                                    dmLoading = dmLoading,
+                                    dmError = dmError,
+                                    onRefreshDmInbox = { viewModel.refreshDmInbox() },
+                                    onLoadDmThread = { viewModel.loadDmThread(it) },
+                                    onSendDm = { threadId, text -> viewModel.sendDmMessage(threadId, text) },
+                                    onRetryDm = { threadId, message -> viewModel.retryDmMessage(threadId, message) },
+                                    onDmVisible = { viewModel.startDmPolling(it) },
+                                    onDmHidden = viewModel::stopDmPolling,
+                                    search = search,
+                                    onSearch = viewModel::searchUsers,
+                                    onClearSearch = viewModel::clearSearch,
+                                    storyError = storyError,
+                                    onOpenTrayStory = viewModel::openTrayStory,
+                                    onClearStoryError = viewModel::clearStoryError,
                                 )
                             }
                             if (error != null) AlertDialog(
@@ -107,23 +105,8 @@ class MainActivity : ComponentActivity() {
     private fun toast(message: String) =
         android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent); setIntent(intent); handleNotification(intent)
-    }
-
-    private fun handleNotification(intent: Intent?) {
-        intent?.getStringExtra(LocalNotifications.EXTRA_ACTIVITY)?.let {
-            viewModel.openNotification(it)
-            intent.removeExtra(LocalNotifications.EXTRA_ACTIVITY)
-        }
-    }
-
     override fun onStart() {
         super.onStart(); viewModel.setForeground(true)
-
-        if (getSharedPreferences("growth_service", MODE_PRIVATE).getBoolean("enabled", false)) {
-            runCatching { LocalNotifications.startContinuous(this) }
-        }
     }
 
     override fun onStop() {

@@ -1,55 +1,94 @@
 package com.instaos.app.ui
 
-import androidx.compose.animation.AnimatedContent
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.instaos.app.model.*
 
+/**
+ * Reels (phase 3): the real reels feed — videos from the home feed
+ * (mixed authors, from the web session) plus the user's own local videos.
+ * Full-screen vertical pager, right action rail (like / comments / save /
+ * share), double-tap to like, sound toggle. No repost button: there is no
+ * web endpoint for it in v1, and a dead button is worse than a missing one.
+ */
 @Composable
-fun ReelsScreen(state: AppState, onAction: (Action) -> Unit) {
-    val reels = state.posts.filter { it.media.kind != MediaKind.IMAGE }
+fun ReelsScreen(
+    state: AppState,
+    feed: FeedUiState,
+    onAction: (Action) -> Unit,
+    onRefreshFeed: () -> Unit = {},
+    onFeedLike: (Post) -> Unit = {},
+    onFeedSave: (Post) -> Unit = {},
+) {
+    val feedReels = feed.posts.filter { it.media.kind != MediaKind.IMAGE }
+    val ownReels = state.posts.filter { it.media.kind != MediaKind.IMAGE }
+    val reels = (feedReels + ownReels.filterNot { own -> feedReels.any { it.id == own.id } })
     val pager = rememberPagerState { reels.size }
+    var muted by rememberSaveable { mutableStateOf(true) }
     AppScaffold(state, onAction) { padding ->
         if (reels.isEmpty()) Column(
             Modifier.fillMaxSize().padding(padding),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            EmptyGrid("Your videos belong here")
-            TextButton(onClick = {
-                onAction(Action.SaveDraft(state.draft.copy(mode = 3, stage = "camera"))); onAction(
-                Action.Navigate("create")
+            EmptyGrid(
+                if (feed.loading) "Loading reels…" else "No reels in your feed yet"
             )
-            }) { Text("Create a reel") }
+            OutlinedButton(onClick = onRefreshFeed) { Text("Refresh") }
         } else VerticalPager(pager, Modifier.fillMaxSize().padding(padding), key = { reels[it].id }) { page ->
             val post = reels[page]
-            Box(Modifier.fillMaxSize().background(Color.Black)) {
+            val isFeedPost = feedReels.any { it.id == post.id }
+            val haptic = LocalHapticFeedback.current
+            val context = LocalContext.current
+            var heart by remember(post.id) { mutableIntStateOf(0) }
+            var showHeart by remember(post.id) { mutableStateOf(false) }
+            LaunchedEffect(heart) {
+                if (heart > 0) {
+                    showHeart = true
+                    kotlinx.coroutines.delay(650)
+                    showHeart = false
+                }
+            }
+            Box(
+                Modifier.fillMaxSize().background(Color.Black)
+                    .pointerInput(post.id) {
+                        detectTapGestures(onDoubleTap = {
+                            if (!post.liked) {
+                                if (isFeedPost) onFeedLike(post) else onAction(Action.LikePost(post.id, onlyLike = true))
+                            }
+                            heart++
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        })
+                    }
+            ) {
                 MediaContent(
                     post.media,
                     Modifier.fillMaxSize(),
                     playVideo = page == pager.settledPage,
-                    controls = false
+                    controls = false,
+                    muted = muted,
                 )
                 Box(
                     Modifier.fillMaxSize().background(
@@ -62,13 +101,25 @@ fun ReelsScreen(state: AppState, onAction: (Action) -> Unit) {
                         )
                     )
                 )
-                Text(
-                    "Reels",
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(18.dp)
-                )
+                Row(
+                    Modifier.fillMaxWidth().padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Reels",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { muted = !muted }) {
+                        Icon(
+                            if (muted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                            if (muted) "Unmute reel" else "Mute reel",
+                            tint = Color.White,
+                        )
+                    }
+                }
                 Column(
                     Modifier.align(Alignment.BottomStart).padding(start = 16.dp, end = 70.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -99,7 +150,9 @@ fun ReelsScreen(state: AppState, onAction: (Action) -> Unit) {
                     Modifier.align(Alignment.BottomEnd).padding(12.dp, 24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    IconButton(onClick = { onAction(Action.LikePost(post.id)) }) {
+                    IconButton(onClick = {
+                        if (isFeedPost) onFeedLike(post) else onAction(Action.LikePost(post.id))
+                    }) {
                         Icon(
                             if (post.liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                             "Like reel",
@@ -115,204 +168,44 @@ fun ReelsScreen(state: AppState, onAction: (Action) -> Unit) {
                         )
                     }
                     Text(formatCount(post.commentCount), color = Color.White)
-                    IconButton(onClick = { onAction(Action.SavePost(post.id)) }) {
+                    IconButton(onClick = {
+                        if (isFeedPost) onFeedSave(post) else onAction(Action.SavePost(post.id))
+                    }) {
                         Icon(
                             if (post.saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                             "Save reel",
                             tint = Color.White
                         )
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun NotificationsScreen(state: AppState, onAction: (Action) -> Unit) {
-    var selected by remember { mutableStateOf<FakePerson?>(null) }
-    val now = System.currentTimeMillis()
-    val groups = state.activity.groupBy {
-        when {
-            now - it.createdAt < 86400000 -> "Today"
-            now - it.createdAt < 7 * 86400000L -> "This week"
-            else -> "Earlier"
-        }
-    }
-    AppScaffold(state, onAction) { padding ->
-        LazyColumn(
-            Modifier.fillMaxSize().padding(padding).testTag("activityList"),
-            contentPadding = PaddingValues(vertical = 8.dp)
-        ) {
-            item {
-                Row(Modifier.padding(horizontal = 18.dp)) {
-                    SectionTitle(
-                        "Activity",
-                        "Mark read"
-                    ) { onAction(Action.ReadEvents) }
-                }
-            }
-            if (state.activity.isEmpty()) item {
-                Column(Modifier.fillMaxWidth().padding(36.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.FavoriteBorder, null, Modifier.size(46.dp))
-                    Text(
-                        "Your activity starts here",
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(top = 16.dp)
-                    )
-                    Text(
-                        "Share a moment. Likes, comments and new followers will arrive at your chosen pace.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
-            }
-            groups.forEach { (label, entries) ->
-                item { Text(label, fontWeight = FontWeight.Bold, modifier = Modifier.padding(18.dp, 14.dp)) }
-                items(entries, key = { it.id }) { event ->
-                    val person = state.people.find { it.id == event.person.id } ?: event.person
-                    val media = state.posts.find { it.id == event.postId }?.media
-                        ?: state.stories.find { it.id == event.storyId }?.media
-                    Row(
-                        Modifier.animateItem().fillMaxWidth()
-                            .background(if (event.read) Color.Transparent else ActionBlue.copy(alpha = .07f))
-                            .clickable {
-                                onAction(Action.OpenActivity(event.id))
-                                if (event.kind == InteractionKind.FOLLOW) selected = person
-                            }.padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Avatar(person, Modifier.size(46.dp).clickable { selected = person })
-                        Spacer(Modifier.width(12.dp))
-                        Text(buildAnnotatedString {
-                            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(person.username) }
-                            append(" ${event.message()} ")
-                            withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) {
-                                append(
-                                    formatTime(
-                                        event.createdAt
-                                    )
-                                )
-                            }
-                        }, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.width(10.dp))
-                        if (event.kind == InteractionKind.FOLLOW) Button(
-                            onClick = { onAction(Action.Follow(person.id)) },
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(12.dp, 5.dp)
-                        ) { Text(if (person.followed) "Following" else "Follow back") }
-                        else if (media != null) MediaContent(media, Modifier.size(44.dp, 52.dp))
+                    if (post.shortcode.isNotBlank()) IconButton(onClick = {
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, "https://www.instagram.com/p/${post.shortcode}/")
+                        }
+                        runCatching {
+                            context.startActivity(Intent.createChooser(intent, "Share reel"))
+                        }
+                    }) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            "Share reel",
+                            tint = Color.White
+                        )
                     }
                 }
-            }
-        }
-    }
-    selected?.let { PersonSheet(state, it, onAction) { selected = null } }
-}
-
-@Composable
-fun PersonRow(person: FakePerson, onAction: (Action) -> Unit, onOpen: () -> Unit) {
-    val haptic = LocalHapticFeedback.current
-    Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-        Avatar(person, Modifier.size(44.dp).clickable(onClick = onOpen))
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f).clickable(onClick = onOpen)) {
-            Text(person.username, fontWeight = FontWeight.SemiBold, maxLines = 1)
-            Text(
-                person.displayName,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-        Button(
-            onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onAction(Action.Follow(person.id)) },
-            shape = RoundedCornerShape(8.dp),
-            contentPadding = PaddingValues(14.dp, 5.dp)
-        ) {
-            AnimatedContent(person.followed, label = "follow-state") { Text(if (it) "Following" else "Follow") }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PeopleSheet(
-    state: AppState,
-    title: String,
-    people: List<FakePerson>,
-    onAction: (Action) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var selected by remember { mutableStateOf<FakePerson?>(null) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(20.dp, 8.dp)
-        )
-        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp), contentPadding = PaddingValues(20.dp)) {
-            items(people, key = { it.id }) { person ->
-                PersonRow(state.people.find { it.id == person.id } ?: person,
-                    onAction) { selected = person }
-            }
-            if (people.isEmpty()) item { Text("No profiles yet", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
-    }
-    selected?.let { PersonSheet(state, it, onAction) { selected = null } }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PersonSheet(state: AppState, original: FakePerson, onAction: (Action) -> Unit, onDismiss: () -> Unit) {
-    val person = state.people.find { it.id == original.id } ?: original
-    val seed = person.id.hashCode().toLong().and(0x7fffffff)
-    val bios = listOf(
-        "little moments, big memories",
-        "coffee first ☕",
-        "somewhere outside 🌿",
-        "creating as I go",
-        "less scrolling, more living",
-        "film • music • late nights",
-        "just here for the good stuff",
-        "one day at a time"
-    )
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Avatar(person, Modifier.size(80.dp)); Spacer(Modifier.width(18.dp))
-                Stat("followers", 80 + seed % 3200, Modifier.weight(1f)); Stat(
-                "following",
-                60 + seed % 800,
-                Modifier.weight(1f)
-            )
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(person.username, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                if (person.verified) Icon(
-                    Icons.Default.Verified,
-                    "Simulated verified badge",
-                    Modifier.padding(start = 6.dp).size(18.dp),
-                    tint = ActionBlue
-                )
-            }
-            Text("${person.displayName}\n${bios[(seed % bios.size).toInt()]}")
-            Text(
-                "Fictional profile",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall
-            )
-            Button(
-                onClick = { onAction(Action.Follow(person.id)) },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp)
-            ) { Text(if (person.followed) "Unfollow" else "Follow") }
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                repeat(3) {
-                    MediaContent(
-                        Media(artwork = (seed % 9).toInt() + it),
-                        Modifier.weight(1f).aspectRatio(1f)
-                    )
+                androidx.compose.animation.AnimatedVisibility(
+                    showHeart,
+                    modifier = Modifier.align(Alignment.Center),
+                    enter = androidx.compose.animation.scaleIn(
+                        androidx.compose.animation.core.spring(dampingRatio = .55f),
+                        initialScale = .4f
+                    ) + androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.scaleOut(
+                        androidx.compose.animation.core.tween(160),
+                        targetScale = 1.2f
+                    ) + androidx.compose.animation.fadeOut()
+                ) {
+                    Icon(Icons.Default.Favorite, "Liked", tint = Color.White, modifier = Modifier.size(96.dp))
                 }
             }
         }

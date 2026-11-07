@@ -55,25 +55,35 @@ fun MediaContent(
     paused: Boolean = false,
     controls: Boolean = true,
     description: String? = null,
+    /** When set, the caller's mute state wins over the player's own toggle. */
+    muted: Boolean? = null,
 ) {
     val context = LocalContext.current
     val video = media.kind != MediaKind.IMAGE && media.path.isNotBlank()
-    val source = media.path.ifBlank { "file:///android_asset/photos/${media.artwork.mod(9)}.jpg" }
-
-    // Phase 2: real Instagram media arrives as https CDN URLs. Coil 2.7.0
-    // already loads https; the old allowlist rejected it outright, which
-    // is the most likely "black images" bug after the refactor.
+    // Phase 3: no bundled fake-photo fallback any more (the
+    // `assets/photos` files are deleted with the simulation). A blank path
+    // is an honest empty tile, never a stock photo pretending to be real.
+    val source = media.path
     val uri =
-        remember(source) { Uri.parse(source).takeIf { it.scheme in listOf("file", "content", "android.resource", "http", "https") } }
+        remember(source) {
+            if (source.isBlank()) null
+            else Uri.parse(source).takeIf { it.scheme in listOf("file", "content", "android.resource", "http", "https") }
+        }
     Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
         when {
-            uri == null -> Text(
-                "Only local media is supported",
-                color = Color.White,
-                modifier = Modifier.padding(20.dp)
-            )
+            uri == null -> Box(
+                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.PhotoLibrary,
+                    "No media",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
 
-            video && playVideo -> LocalVideo(uri, paused, controls)
+            video && playVideo -> LocalVideo(uri, paused, controls, muted)
             else -> {
                 SubcomposeAsyncImage(
                     model = remember(source, video) {
@@ -105,12 +115,13 @@ fun MediaContent(
 }
 
 @Composable
-private fun LocalVideo(uri: Uri, paused: Boolean, controls: Boolean) {
+private fun LocalVideo(uri: Uri, paused: Boolean, controls: Boolean, mutedOverride: Boolean? = null) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var foreground by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
     var userPaused by rememberSaveable(uri.toString()) { mutableStateOf(false) }
     var muted by rememberSaveable(uri.toString()) { mutableStateOf(true) }
+    val effectiveMuted = mutedOverride ?: muted
     var problem by remember(uri) { mutableStateOf<String?>(null) }
     val player = remember(uri) {
         ExoPlayer.Builder(context).build().apply {
@@ -131,9 +142,9 @@ private fun LocalVideo(uri: Uri, paused: Boolean, controls: Boolean) {
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer); player.release() }
     }
-    LaunchedEffect(paused, foreground, userPaused, muted, player) {
+    LaunchedEffect(paused, foreground, userPaused, effectiveMuted, player) {
         player.playWhenReady = foreground && !paused && !userPaused
-        player.volume = if (muted) 0f else 1f
+        player.volume = if (effectiveMuted) 0f else 1f
     }
     AndroidView(
         factory = { TextureView(it).also(player::setVideoTextureView) },
@@ -157,11 +168,13 @@ private fun LocalVideo(uri: Uri, paused: Boolean, controls: Boolean) {
                     tint = Color.White
                 )
             }
-            IconButton(onClick = {
+            // The mute toggle belongs to the player unless a caller (the
+            // Reels rail) owns the mute state — then it shows nothing here.
+            if (mutedOverride == null) IconButton(onClick = {
                 muted = !muted
             }) {
                 Icon(
-                    if (muted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                    if (effectiveMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
                     "Toggle video sound",
                     tint = Color.White
                 )

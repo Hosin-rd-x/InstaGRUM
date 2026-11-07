@@ -49,6 +49,9 @@ fun HomeFeedScreen(
     onFeedSave: (Post) -> Unit,
     onFeedComment: (Post, String, String?) -> Unit,
     onOpenLogin: () -> Unit,
+    onOpenTrayStory: (StoryTrayItem) -> Unit = {},
+    storyError: String? = null,
+    onClearStoryError: () -> Unit = {},
 ) {
     var refreshing by remember { mutableStateOf(false) }
     LaunchedEffect(feed.loading) { if (!feed.loading) refreshing = false }
@@ -96,7 +99,21 @@ fun HomeFeedScreen(
                     contentPadding = PaddingValues(bottom = 36.dp),
                 ) {
                     item {
-                        StoriesTray(state, feed, onAction)
+                        StoriesTray(state, feed, onAction, onOpenTrayStory)
+                        if (storyError != null) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    storyError,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = onClearStoryError) { Text("Dismiss") }
+                            }
+                        }
                     }
                     if (feed.posts.isEmpty() && !feed.loading) {
                         item {
@@ -148,7 +165,7 @@ fun HomeFeedScreen(
 }
 
 @Composable
-private fun StoriesTray(state: AppState, feed: FeedUiState, onAction: (Action) -> Unit) {
+private fun StoriesTray(state: AppState, feed: FeedUiState, onAction: (Action) -> Unit, onOpenTrayStory: (StoryTrayItem) -> Unit) {
     androidx.compose.foundation.lazy.LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -180,7 +197,7 @@ private fun StoriesTray(state: AppState, feed: FeedUiState, onAction: (Action) -
         items(feed.tray.size) { index ->
             val item = feed.tray[index]
             Column(
-                Modifier.width(64.dp),
+                Modifier.width(64.dp).clickable { onOpenTrayStory(item) },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Box(

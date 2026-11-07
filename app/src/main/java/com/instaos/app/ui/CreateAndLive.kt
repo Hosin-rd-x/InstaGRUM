@@ -51,7 +51,6 @@ fun CreateScreen(state: AppState, onAction: (Action) -> Unit) {
     val haptic = LocalHapticFeedback.current
     val shareProgress = remember { Animatable(0f) }
     val story = draft.mode == 1
-    val live = draft.mode == 2
     val reel = draft.mode == 3
     val selectedKind = if (reel) MediaKind.REEL else MediaKind.IMAGE
     fun update(next: CreationDraft) {
@@ -70,22 +69,10 @@ fun CreateScreen(state: AppState, onAction: (Action) -> Unit) {
         if (!publishing) return@LaunchedEffect
         shareProgress.animateTo(1f, tween(850, easing = FastOutSlowInEasing))
 
-        if (live) onAction(
-            Action.StartLive(
-                LiveConfig(
-                    title = draft.liveConfig.title.ifBlank { "Live" },
-                    thumbnail = draft.media.copy(kind = MediaKind.IMAGE),
-                    startingViewers = 0,
-                    minViewers = 0,
-                    durationMinutes = 120
-                )
-            )
-        )
-        else if (story) onAction(
+        if (story) onAction(
             Action.CreateStory(
                 draft.media,
                 draft.caption,
-                9_000_000_000_000L,
                 "",
                 draft.overlay.copy(closeFriends = closeFriends)
             )
@@ -94,11 +81,7 @@ fun CreateScreen(state: AppState, onAction: (Action) -> Unit) {
             Action.CreatePost(
                 draft.media.copy(kind = if (reel) MediaKind.REEL else draft.media.kind),
                 draft.caption,
-                draft.location,
-                0,
-                0,
-                0,
-                35
+                draft.location
             )
         )
     }
@@ -165,30 +148,13 @@ fun CreateScreen(state: AppState, onAction: (Action) -> Unit) {
                                     )
                                 )
                             })
-                        } else if (!live) CreatorIcon(
+                        } else CreatorIcon(
                             if (flash) Icons.Default.FlashOn else Icons.Default.FlashOff,
                             "Toggle flash",
                             { flash = !flash })
                         CreatorIcon(Icons.Default.Close, "Close creation", { onAction(Action.Navigate()) })
                     }
-                    if (live) Column(
-                        Modifier.align(Alignment.CenterStart).padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        TextButton(onClick = { textEditor = true }) {
-                            Icon(
-                                Icons.Default.FormatAlignLeft,
-                                null,
-                                tint = Color.White
-                            ); Text("  Title", color = Color.White)
-                        }
-                        Text(
-                            "Your audience joins naturally\nafter you go live.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = .7f)
-                        )
-                    }
-                    if (draft.stage == "camera" && !live) Text(
+                    if (draft.stage == "camera") Text(
                         if (story) "Tap for a photo, hold to record"
                         else if (reel) "Choose a video from your gallery"
                         else "Capture or choose your own photo",
@@ -207,14 +173,14 @@ fun CreateScreen(state: AppState, onAction: (Action) -> Unit) {
                                 modifier = Modifier.size(42.dp)
                             )
                             Text(
-                                if (live) "Starting live…" else "Sharing…",
+                                "Sharing…",
                                 color = Color.White,
                                 modifier = Modifier.padding(top = 12.dp)
                             )
                         }
                     }
                 }
-                if (draft.stage == "editor" && !story && !live) {
+                if (draft.stage == "editor" && !story) {
                     OutlinedTextField(
                         draft.caption,
                         { update(draft.copy(caption = it.take(2200))) },
@@ -223,7 +189,7 @@ fun CreateScreen(state: AppState, onAction: (Action) -> Unit) {
                         maxLines = 3
                     )
                 }
-                if (draft.stage == "editor" && !live) {
+                if (draft.stage == "editor") {
                     Row(
                         Modifier.fillMaxWidth().imePadding().padding(12.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -262,7 +228,7 @@ fun CreateScreen(state: AppState, onAction: (Action) -> Unit) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        GalleryButton(selectedKind, ::select, mixed = !live)
+                        GalleryButton(selectedKind, ::select, mixed = true)
                         Box(Modifier.size(84.dp), contentAlignment = Alignment.Center) {
                             if (story && recording) CircularProgressIndicator(
                                 progress = { recordProgress },
@@ -274,18 +240,12 @@ fun CreateScreen(state: AppState, onAction: (Action) -> Unit) {
                             Box(
                                 Modifier.fillMaxSize().border(
                                     3.dp,
-                                    if (live) Brush.linearGradient(
-                                        listOf(
-                                            Color(0xFFFF7855),
-                                            Color(0xFFEA3CAE),
-                                            Color(0xFFB644E8)
-                                        )
-                                    ) else Brush.linearGradient(listOf(Color.White, Color.White)),
+                                    Brush.linearGradient(listOf(Color.White, Color.White)),
                                     CircleShape
                                 )
                                     .padding(7.dp).clip(CircleShape)
-                                    .background(if (live) Color.White else Color.White.copy(alpha = .96f))
-                                    .testTag(if (live) "startLiveButton" else "shutter")
+                                    .background(Color.White.copy(alpha = .96f))
+                                    .testTag("shutter")
                                     .then(
                                         if (story && !publishing) Modifier.pointerInput(Unit) {
                                             detectTapGestures(onPress = {
@@ -300,23 +260,17 @@ fun CreateScreen(state: AppState, onAction: (Action) -> Unit) {
                                             })
                                         } else Modifier.clickable(enabled = !publishing) {
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            if (live) publishing = true else if (!reel) capture++
+                                            if (!reel) capture++
                                         }
                                     ), contentAlignment = Alignment.Center
                             ) {
-                                if (live) Icon(
-                                    Icons.Default.WifiTethering,
-                                    "Start simulated live",
-                                    tint = Color.Black,
-                                    modifier = Modifier.size(38.dp)
-                                )
-                                else if (reel) Icon(Icons.Default.VideoLibrary, "Import a reel", tint = Color.Black)
+                                if (reel) Icon(Icons.Default.VideoLibrary, "Import a reel", tint = Color.Black)
                             }
                         }
                         CreatorIcon(Icons.Default.Cameraswitch, "Switch camera", { front = !front })
                     }
                     Row(Modifier.fillMaxWidth().padding(bottom = 18.dp), horizontalArrangement = Arrangement.Center) {
-                        listOf(0 to "POST", 1 to "STORY", 3 to "REEL", 2 to "LIVE").forEach { (mode, title) ->
+                        listOf(0 to "POST", 1 to "STORY", 3 to "REEL").forEach { (mode, title) ->
                             TextButton(onClick = {
                                 update(
                                     draft.copy(
@@ -339,10 +293,10 @@ fun CreateScreen(state: AppState, onAction: (Action) -> Unit) {
         }
     }
     if (textEditor) {
-        var text by remember { mutableStateOf(if (live) draft.liveConfig.title else draft.overlay.text) }
+        var text by remember { mutableStateOf(draft.overlay.text) }
         AlertDialog(
             onDismissRequest = { textEditor = false },
-            title = { Text(if (live) "Add a title" else "Story text") },
+            title = { Text("Story text") },
             text = {
                 OutlinedTextField(
                     text,
@@ -352,13 +306,7 @@ fun CreateScreen(state: AppState, onAction: (Action) -> Unit) {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (live) update(
-                        draft.copy(
-                            liveConfig = draft.liveConfig.copy(
-                                title = text
-                            )
-                        )
-                    ) else update(draft.copy(overlay = draft.overlay.copy(text = text))); textEditor = false
+                    update(draft.copy(overlay = draft.overlay.copy(text = text))); textEditor = false
                 }) { Text("Done") }
             })
     }
@@ -442,318 +390,6 @@ fun StoryDecoration(overlay: StoryOverlay, modifier: Modifier = Modifier, onChan
                 modifier = Modifier.padding(top = 14.dp)
                     .background(Color.Black.copy(alpha = .2f), RoundedCornerShape(12.dp)).padding(10.dp)
             )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LiveScreen(state: AppState, onAction: (Action) -> Unit) {
-    val live = state.activeLive
-    if (live == null) {
-        LaunchedEffect(Unit) { onAction(Action.Navigate("history")) }; return
-    }
-    var comment by rememberSaveable { mutableStateOf("") }
-    var ending by rememberSaveable { mutableStateOf(false) }
-    var stats by rememberSaveable { mutableStateOf(false) }
-    var front by rememberSaveable { mutableStateOf(true) }
-    var micOn by rememberSaveable { mutableStateOf(true) }
-    var cameraOn by rememberSaveable { mutableStateOf(true) }
-    var liveZoom by rememberSaveable { mutableFloatStateOf(1f) }
-    var heart by remember { mutableIntStateOf(0) }
-    var visible by remember { mutableStateOf(false) }
-    val chatState = rememberLazyListState()
-    LaunchedEffect(live.chat.size) {
-        if (live.chat.isNotEmpty()) chatState.animateScrollToItem(0)
-    }
-    val haptic = LocalHapticFeedback.current
-    LaunchedEffect(live.likes, heart) {
-        if (live.likes > 0 || heart > 0) {
-            visible = true; delay(900); visible = false
-        }
-    }
-    BackHandler { ending = true }
-    InstaTheme(true) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-                .pointerInput(cameraOn) {
-                    if (cameraOn) {
-                        detectTransformGestures { _, _, zoomFactor, _ ->
-                            liveZoom = (liveZoom * zoomFactor).coerceIn(1f, 8f)
-                        }
-                    }
-                }
-        ) {
-            if (live.config.thumbnail.path.isNotBlank()) MediaContent(live.config.thumbnail, Modifier.fillMaxSize())
-            else if (cameraOn) CameraCapture(
-                front = front,
-                recording = false,
-                onCaptured = {},
-                modifier = Modifier.fillMaxSize(),
-                externalZoom = liveZoom,
-                onZoomChanged = { liveZoom = it }
-            )
-            else Box(Modifier.fillMaxSize().background(Color(0xFF1A1A1A)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.VideocamOff, null, Modifier.size(54.dp), tint = Color.White.copy(alpha = .35f))
-            }
-            Box(
-                Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.Black.copy(alpha = .35f),
-                            Color.Transparent,
-                            Color.Black.copy(alpha = .8f)
-                        )
-                    )
-                )
-            )
-            Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    AvatarFromProfile(state.profile, Modifier.size(32.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        state.profile.username,
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
-                    )
-                    Icon(
-                        Icons.Default.KeyboardArrowDown,
-                        null,
-                        Modifier.size(20.dp).padding(start = 2.dp),
-                        tint = Color.White
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        "LIVE",
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .background(Color(0xFFFF0169), RoundedCornerShape(50))
-                            .padding(horizontal = 13.dp, vertical = 5.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Row(
-                        Modifier
-                            .background(Color.White.copy(alpha = .22f), RoundedCornerShape(9.dp))
-                            .clickable { stats = true }
-                            .padding(horizontal = 9.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.RemoveRedEye, null, Modifier.size(15.dp), tint = Color.White)
-                        Text(
-                            "  ${formatCount(live.viewers.toLong())}",
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    Icon(
-                        Icons.Default.MoreHoriz,
-                        "Live options",
-                        Modifier.padding(start = 6.dp).size(24.dp).clickable { stats = true },
-                        tint = Color.White
-                    )
-                    Icon(
-                        Icons.Default.Close,
-                        "End livestream",
-                        Modifier.padding(start = 6.dp).size(24.dp).clickable { ending = true },
-                        tint = Color.White
-                    )
-                }
-                Text(
-                    live.config.title,
-                    color = Color.White.copy(alpha = .8f),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 10.dp)
-                )
-                if (state.settings.paused) Text("Activity paused", color = Color.White)
-                Row(Modifier.fillMaxWidth()) {
-                    Spacer(Modifier.weight(1f))
-                    Column(
-                        Modifier.padding(top = 18.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(20.dp)
-                    ) {
-                        Icon(
-                            if (micOn) Icons.Default.Mic else Icons.Default.MicOff,
-                            "Toggle microphone",
-                            Modifier.size(26.dp).clickable { micOn = !micOn },
-                            tint = Color.White.copy(alpha = if (micOn) 1f else .55f)
-                        )
-                        Icon(
-                            if (cameraOn) Icons.Default.Videocam else Icons.Default.VideocamOff,
-                            "Toggle camera",
-                            Modifier.size(26.dp).clickable { cameraOn = !cameraOn },
-                            tint = Color.White.copy(alpha = if (cameraOn) 1f else .55f)
-                        )
-                        Icon(
-                            Icons.Default.FlipCameraAndroid,
-                            "Switch camera",
-                            Modifier.size(26.dp).clickable(enabled = cameraOn) { front = !front },
-                            tint = Color.White.copy(alpha = if (cameraOn) 1f else .3f)
-                        )
-                        if (cameraOn) {
-                            Surface(
-                                onClick = { liveZoom = if (liveZoom < 1.85f) 2f else 1f },
-                                shape = CircleShape,
-                                color = Color.Black.copy(alpha = .45f),
-                                border = BorderStroke(1.dp, Color.White.copy(alpha = .35f)),
-                                modifier = Modifier.size(30.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = if (liveZoom in 1.9f..2.1f) "2x" else if (liveZoom < 1.15f) "1x" else String.format(java.util.Locale.US, "%.1fx", liveZoom),
-                                        color = Color.White,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                Box(Modifier.fillMaxWidth().height(240.dp)) {
-                    LazyColumn(
-                        Modifier.fillMaxSize().padding(end = 36.dp),
-                        state = chatState,
-                        reverseLayout = true
-                    ) {
-                        items(live.chat.asReversed(), key = { it.id }) { chat ->
-                            Row(Modifier.animateItem().padding(vertical = 5.dp)) {
-                                Avatar(chat.person, Modifier.size(30.dp)); Spacer(Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        chat.person.username,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.SemiBold,
-                                        style = MaterialTheme.typography.labelMedium
-                                    ); Text(chat.text, color = Color.White, style = MaterialTheme.typography.bodyMedium)
-                                }
-                            }
-                        }
-                        if (live.chat.isEmpty()) item {
-                            Text(
-                                "You're live. Give people a moment to join.",
-                                color = Color.White.copy(alpha = .65f),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible,
-                        modifier = Modifier.align(Alignment.BottomEnd),
-                        enter = slideInVertically { it } + fadeIn(),
-                        exit = slideOutVertically { -it * 3 } + fadeOut()) {
-                        Icon(
-                            Icons.Default.Favorite,
-                            null,
-                            tint = HeartColor,
-                            modifier = Modifier.size(30.dp)
-                        )
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        comment,
-                        { comment = it.take(500) },
-                        Modifier.weight(1f),
-                        placeholder = { Text("Comment", color = Color.White.copy(alpha = .6f)) },
-                        maxLines = 2,
-                        shape = RoundedCornerShape(24.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedTextColor = Color.White,
-                            focusedTextColor = Color.White,
-                            unfocusedBorderColor = Color.White.copy(alpha = .45f)
-                        )
-                    )
-                    IconButton(
-                        onClick = { onAction(Action.LiveComment(comment)); comment = "" },
-                        enabled = comment.isNotBlank()
-                    ) { Icon(Icons.AutoMirrored.Filled.Send, "Send live comment", tint = Color.White) }
-                    IconButton(onClick = {
-                        onAction(Action.LiveLike); heart++; haptic.performHapticFeedback(
-                        HapticFeedbackType.LongPress
-                    )
-                    }) { Icon(Icons.Default.FavoriteBorder, "Like livestream", tint = Color.White) }
-                    HypeButton(live.hypeUntil > live.elapsedSeconds) {
-                        if (live.hypeUntil > live.elapsedSeconds) onAction(Action.LiveDehype)
-                        else onAction(Action.LiveHype)
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    }
-                }
-            }
-        }
-    }
-    if (ending) ConfirmAction(
-        "End live?",
-        "Your session will be saved to your private live history.",
-        { onAction(Action.StopLive) },
-        { ending = false })
-    if (stats) ModalBottomSheet(onDismissRequest = { stats = false }) {
-        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Live insights", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("${formatCount(live.viewers.toLong())} watching · ${formatCount(live.peakViewers.toLong())} peak")
-            Text("${formatCount(live.likes)} likes · ${formatCount(live.totalComments)} comments")
-            Text("${formatCount(live.newFollowers)} new followers · ${formatDuration(live.elapsedSeconds)}")
-        }
-    }
-}
-
-@Composable
-private fun HypeButton(active: Boolean, onClick: () -> Unit) {
-    val pulse = rememberInfiniteTransition(label = "hype")
-    val glow by pulse.animateFloat(
-        initialValue = .65f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
-        label = "glow"
-    )
-    val scale by animateFloatAsState(if (active) 1.12f else 1f, Motion.pop(), label = "hype-scale")
-    Box(
-        Modifier.size(46.dp).graphicsLayer {
-            scaleX = scale; scaleY = scale; alpha = if (active) glow else 1f
-        }.clip(CircleShape)
-            .background(
-                if (active) Brush.linearGradient(listOf(Color(0xFFFA7E1E), Color(0xFFD62976)))
-                else Brush.linearGradient(listOf(Color.White.copy(alpha = .18f), Color.White.copy(alpha = .18f)))
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) { Icon(Icons.Default.Bolt, "Hype the room", tint = Color.White, modifier = Modifier.size(26.dp)) }
-}
-
-@Composable
-fun LiveHistory(state: AppState, onAction: (Action) -> Unit) {
-    Scaffold(topBar = { ScreenHeader("Live history", { onAction(Action.Navigate()) }) }) { padding ->
-        LazyColumn(
-            Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            if (state.liveHistory.isEmpty()) item { EmptyGrid("Your completed livestreams will appear here") }
-            items(state.liveHistory, key = { it.id }) { live ->
-                Column(
-                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-                        .padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(live.config.title, fontWeight = FontWeight.Bold)
-                    Text(
-                        "${formatTime(live.startedAt)} · ${formatDuration(live.elapsedSeconds)}",
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                    Text("${formatCount(live.peakViewers.toLong())} peak viewers · ${formatCount(live.likes)} likes")
-                    Text(
-                        "${formatCount(live.totalComments)} comments · ${formatCount(live.newFollowers)} new followers",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
         }
     }
 }

@@ -55,49 +55,6 @@ private fun formatStoryTime(timestamp: Long): String {
 }
 
 @Composable
-private fun CrossShareIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val r = w * 0.31f
-        val stroke = Stroke(width = 1.6.dp.toPx())
-        // Left bubble
-        drawCircle(
-            color = Color.White,
-            radius = r,
-            center = androidx.compose.ui.geometry.Offset(w * 0.36f, h * 0.5f),
-            style = stroke
-        )
-        // Little tail for left bubble
-        val tail = Path().apply {
-            moveTo(w * 0.22f, h * 0.65f)
-            lineTo(w * 0.12f, h * 0.82f)
-            lineTo(w * 0.32f, h * 0.72f)
-        }
-        drawPath(tail, color = Color.White, style = stroke)
-        // Right bubble
-        drawCircle(
-            color = Color.White,
-            radius = r,
-            center = androidx.compose.ui.geometry.Offset(w * 0.64f, h * 0.5f),
-            style = stroke
-        )
-    }
-}
-
-@Composable
-private fun MentionIcon(modifier: Modifier = Modifier) {
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        Text(
-            text = "@",
-            color = Color.White,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold
-        )
-    }
-}
-
-@Composable
 private fun DownwardCaret(modifier: Modifier = Modifier, color: Color = Color(0xFF282828)) {
     Canvas(modifier = modifier) {
         val path = Path().apply {
@@ -137,6 +94,18 @@ private fun StoryActionItem(
     }
 }
 
+/**
+ * Story viewer (phase 3).
+ *
+ * The viewer itself is unchanged in shape (progress, gestures, reply) —
+ * what changed is the data: the header shows the story's real author
+ * (tray stories carry theirs; own stories fall back to the local profile),
+ * the reply field exists only for your own stories (a reply to someone
+ * else's story is a DM, and story replies are not in v1), and the old
+ * "Share on… / Send / Mention" buttons are gone — they were no-ops.
+ * The insights panel no longer invents a viewer ("Tony") when the viewer
+ * list is empty: it says so plainly.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StoryViewer(state: AppState, storyId: String, onAction: (Action) -> Unit) {
@@ -166,6 +135,9 @@ fun StoryViewer(state: AppState, storyId: String, onAction: (Action) -> Unit) {
         if (drag > 0) (1f - drag / (threshold * 8)).coerceIn(.86f, 1f) else 1f,
         label = "story-dismiss-scale"
     )
+    // Own story (author == null) vs. someone else's (tray) story.
+    val isOwn = story.author == null
+    val authorName = story.author?.username ?: state.profile.username
 
     fun next(offset: Int) {
         val list = latestSequence
@@ -232,7 +204,7 @@ fun StoryViewer(state: AppState, storyId: String, onAction: (Action) -> Unit) {
                     }, onLongPress = {}, onTap = { next(if (it.x < size.width * .3f) -1 else 1) })
                 }.pointerInput(storyId) {
                     detectVerticalDragGestures(onDragStart = { drag = 0f }, onDragCancel = { drag = 0f }, onDragEnd = {
-                        if (drag > threshold) dispatch(Action.OpenStory(null)) else if (drag < -threshold) insights =
+                        if (drag > threshold) dispatch(Action.OpenStory(null)) else if (drag < -threshold && isOwn) insights =
                             true
                         drag = 0f
                     }, onVerticalDrag = { change, amount -> change.consume(); drag += amount })
@@ -257,29 +229,21 @@ fun StoryViewer(state: AppState, storyId: String, onAction: (Action) -> Unit) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(Modifier.size(34.dp)) {
-                            AvatarFromProfile(state.profile, Modifier.size(34.dp))
-                            Box(
-                                modifier = Modifier
-                                    .size(13.dp)
-                                    .align(Alignment.BottomEnd)
-                                    .background(Color.Black, CircleShape)
-                                    .border(1.dp, Color.Black, CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.Add,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(10.dp)
-                                )
-                            }
+                            if (story.author != null) AvatarFromUserRef(story.author, Modifier.size(34.dp))
+                            else AvatarFromProfile(state.profile, Modifier.size(34.dp))
                         }
                         Spacer(Modifier.width(9.dp))
                         Text(
-                            state.profile.username,
+                            authorName,
                             color = Color.White,
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold
+                        )
+                        if (story.author?.verified == true) Icon(
+                            Icons.Default.Verified,
+                            "Verified account",
+                            Modifier.size(14.dp).padding(start = 3.dp),
+                            tint = Color.White
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
@@ -288,12 +252,9 @@ fun StoryViewer(state: AppState, storyId: String, onAction: (Action) -> Unit) {
                             style = MaterialTheme.typography.labelSmall
                         )
                         Spacer(Modifier.weight(1f))
-                        if (story.overlay.closeFriends) Icon(
-                            Icons.Default.Stars,
-                            "Close friends story",
-                            tint = Color(0xFF64C866),
-                            modifier = Modifier.size(20.dp)
-                        )
+                        IconButton(onClick = { dispatch(Action.OpenStory(null)) }) {
+                            Icon(Icons.Default.Close, "Close story", tint = Color.White, modifier = Modifier.size(22.dp))
+                        }
                     }
                     Spacer(Modifier.weight(1f))
                     if (story.caption.isNotBlank()) Text(
@@ -305,109 +266,84 @@ fun StoryViewer(state: AppState, storyId: String, onAction: (Action) -> Unit) {
                 }
             }
 
-            if (editingReply) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = reply,
-                        onValueChange = { reply = it.take(500) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("storyReply")
-                            .onFocusChanged { editingReply = it.isFocused },
-                        placeholder = { Text("Say something...", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp) },
-                        maxLines = 2,
-                        shape = RoundedCornerShape(24.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedTextColor = Color.White,
-                            focusedTextColor = Color.White,
-                            unfocusedBorderColor = Color(0xFF555555),
-                            focusedBorderColor = Color.White
-                        )
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    IconButton(
-                        onClick = {
-                            if (reply.isNotBlank()) {
-                                dispatch(Action.StoryReply(story.id, reply))
-                                reply = ""
-                            }
-                            editingReply = false
-                        }
+            // Replies exist only for your own stories. A reply to someone
+            // else's story is a DM — not in this version — so no dead field.
+            if (isOwn) {
+                if (editingReply) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, "Send story reply", tint = Color.White)
+                        OutlinedTextField(
+                            value = reply,
+                            onValueChange = { reply = it.take(500) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("storyReply")
+                                .onFocusChanged { editingReply = it.isFocused },
+                            placeholder = { Text("Say something...", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp) },
+                            maxLines = 2,
+                            shape = RoundedCornerShape(24.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedTextColor = Color.White,
+                                focusedTextColor = Color.White,
+                                unfocusedBorderColor = Color(0xFF555555),
+                                focusedBorderColor = Color.White
+                            )
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        IconButton(
+                            onClick = {
+                                if (reply.isNotBlank()) {
+                                    dispatch(Action.StoryReply(story.id, reply))
+                                    reply = ""
+                                }
+                                editingReply = false
+                            }
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, "Send story reply", tint = Color.White)
+                        }
                     }
+                } else {
+                    Text(
+                        text = "Say something...",
+                        color = Color.White.copy(alpha = 0.72f),
+                        fontSize = 14.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { editingReply = true }
+                            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp)
+                    )
                 }
-            } else {
-                Text(
-                    text = "Say something...",
-                    color = Color.White.copy(alpha = 0.72f),
-                    fontSize = 14.sp,
+
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { editingReply = true }
-                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp)
-                )
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                StoryActionItem(
-                    label = "Activity",
-                    icon = {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF1E1E1E))
-                                .border(1.2.dp, Color.White.copy(alpha = 0.45f), CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            AvatarFromProfile(state.profile, Modifier.size(22.dp))
-                        }
-                    },
-                    onClick = { insights = true },
-                    modifier = Modifier.semantics { contentDescription = "Story insights" }
-                )
-
-                Spacer(Modifier.weight(1f))
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(20.dp),
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     StoryActionItem(
-                        label = "Share on...",
-                        icon = { CrossShareIcon(Modifier.size(24.dp)) },
-                        onClick = { /* share on */ }
-                    )
-                    StoryActionItem(
-                        label = "Send",
+                        label = "Activity",
                         icon = {
-                            Icon(
-                                Icons.AutoMirrored.Filled.Send,
-                                contentDescription = "Send",
-                                tint = Color.White,
+                            Box(
                                 modifier = Modifier
-                                    .size(22.dp)
-                                    .graphicsLayer(rotationZ = -25f)
-                            )
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF1E1E1E))
+                                    .border(1.2.dp, Color.White.copy(alpha = 0.45f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                AvatarFromProfile(state.profile, Modifier.size(22.dp))
+                            }
                         },
-                        onClick = { /* send */ }
+                        onClick = { insights = true },
+                        modifier = Modifier.semantics { contentDescription = "Story insights" }
                     )
-                    StoryActionItem(
-                        label = "Mention",
-                        icon = { MentionIcon(Modifier.size(24.dp)) },
-                        onClick = { /* mention */ }
-                    )
+
+                    Spacer(Modifier.weight(1f))
+
                     StoryActionItem(
                         label = "More",
                         icon = {
@@ -458,16 +394,6 @@ fun StoryViewer(state: AppState, storyId: String, onAction: (Action) -> Unit) {
                             }
                             .padding(vertical = 14.dp)
                     )
-                    HorizontalDivider(color = Color(0xFF333333))
-                    Text(
-                        "Copy link",
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { moreOptions = false }
-                            .padding(vertical = 14.dp)
-                    )
                 }
             }
         }
@@ -479,22 +405,7 @@ fun StoryInsightsPanel(state: AppState, initialId: String, onAction: (Action) ->
     var selectedId by rememberSaveable { mutableStateOf(initialId) }
     var highlightEditor by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
-    var person by remember { mutableStateOf<FakePerson?>(null) }
     val story = state.stories.find { it.id == selectedId } ?: return
-
-    val viewerCount = story.views.coerceAtLeast(story.viewers.size.coerceAtLeast(1).toLong())
-    val displayedViewers = remember(story.viewers, story.views) {
-        if (story.viewers.isNotEmpty()) {
-            story.viewers
-        } else {
-            listOf(
-                StoryVisit(
-                    person = FakePerson(id = "tony", username = "Tony", displayName = "Tony"),
-                    at = story.createdAt + 15_000L
-                )
-            )
-        }
-    }
 
     val allStories = remember(state.stories, selectedId) {
         state.stories.filter { it.expiresAt > System.currentTimeMillis() || it.id == selectedId }.ifEmpty { listOf(story) }
@@ -515,7 +426,6 @@ fun StoryInsightsPanel(state: AppState, initialId: String, onAction: (Action) ->
                     .safeDrawingPadding()
                     .testTag("storyInsights")
             ) {
-                // Top header: Camera glyph on left, Close X on right
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -545,7 +455,6 @@ fun StoryInsightsPanel(state: AppState, initialId: String, onAction: (Action) ->
                     }
                 }
 
-                // Stories preview carousel with all active cards & adjacent camera card
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -590,9 +499,8 @@ fun StoryInsightsPanel(state: AppState, initialId: String, onAction: (Action) ->
                                         modifier = Modifier.size(13.dp)
                                     )
                                     Spacer(Modifier.width(4.dp))
-                                    val itemViews = item.views.coerceAtLeast(item.viewers.size.coerceAtLeast(1).toLong())
                                     Text(
-                                        formatCount(itemViews),
+                                        formatCount(item.views),
                                         color = Color.White,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
@@ -600,7 +508,6 @@ fun StoryInsightsPanel(state: AppState, initialId: String, onAction: (Action) ->
                                 }
                             }
 
-                            // Inverted triangle caret under the active card
                             if (isSelected) {
                                 Box(
                                     Modifier.padding(top = 4.dp),
@@ -646,7 +553,6 @@ fun StoryInsightsPanel(state: AppState, initialId: String, onAction: (Action) ->
                     }
                 }
 
-                // Divider line with Viewers count on left, and Highlight / Delete on right
                 HorizontalDivider(color = Color(0xFF282828), thickness = 0.8.dp)
                 Row(
                     Modifier
@@ -662,15 +568,17 @@ fun StoryInsightsPanel(state: AppState, initialId: String, onAction: (Action) ->
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        formatCount(viewerCount),
+                        formatCount(story.views),
                         color = Color.White,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold
                     )
-                    // Test node support
-                    Box(Modifier.size(0.dp)) {
-                        Text("Viewers")
-                    }
+                    Text(
+                        "Viewers",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(start = 6.dp)
+                    )
                     IconButton(
                         onClick = {},
                         modifier = Modifier
@@ -706,7 +614,6 @@ fun StoryInsightsPanel(state: AppState, initialId: String, onAction: (Action) ->
                 }
                 HorizontalDivider(color = Color(0xFF282828), thickness = 0.8.dp)
 
-                // Section title: "Who viewed your story"
                 Text(
                     "Who viewed your story",
                     color = Color.White,
@@ -715,50 +622,14 @@ fun StoryInsightsPanel(state: AppState, initialId: String, onAction: (Action) ->
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 10.dp)
                 )
 
-                // Viewers list
-                LazyColumn(
-                    Modifier.weight(1f).fillMaxWidth(),
-                    contentPadding = PaddingValues(bottom = 24.dp)
-                ) {
-                    items(displayedViewers, key = { it.person.id }) { visit ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { person = visit.person }
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                Modifier
-                                    .size(44.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF1F1F1F)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Avatar(visit.person, Modifier.size(44.dp))
-                            }
-                            Spacer(Modifier.width(14.dp))
-                            Text(
-                                visit.person.username,
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(Modifier.weight(1f))
-                            IconButton(
-                                onClick = { person = visit.person },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.MoreVert,
-                                    "Viewer profile",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
-                }
+                // Phase 3: no invented viewers. The viewer list comes from
+                // Instagram, and this version does not load it — say so.
+                Text(
+                    "Viewer list isn't available in this version yet — only the view count above.",
+                    color = Color.White.copy(alpha = .65f),
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
             }
 
             if (highlightEditor) {
@@ -785,38 +656,7 @@ fun StoryInsightsPanel(state: AppState, initialId: String, onAction: (Action) ->
                     { deleting = false }
                 )
             }
-
-            person?.let { PersonSheet(state, it, onAction) { person = null } }
         }
-    }
-}
-
-@Composable
-private fun InsightSection(title: String, count: Long, subtitle: String) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Text(title, fontWeight = FontWeight.SemiBold)
-        Text(
-            formatCount(count),
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 22.dp)
-        )
-        Text(
-            subtitle,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 5.dp, bottom = 14.dp)
-        )
-    }
-}
-
-@Composable
-private fun InsightLine(label: String, count: Long) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Text(label, Modifier.weight(1f)); Text(
-        formatCount(count),
-        fontWeight = FontWeight.SemiBold
-    )
     }
 }
 
