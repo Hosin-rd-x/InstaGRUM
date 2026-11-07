@@ -1,4 +1,5 @@
-# InstaGRUM is a local simulator; no networking rules are required.
+# InstaOS is a web-session client; it talks to instagram.com/i.instagram.com
+# over HTTPS. No special networking rules are required.
 
 # kotlinx.serialization writes and reads every saved profile. R8 must not rename
 # or strip these, or an optimized release build would fail to load existing data.
@@ -15,10 +16,3 @@
 -keepclasseswithmembers class kotlinx.serialization.json.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
-
-# WorkManager instantiates the background worker reflectively by class name.
--keep class com.instaos.app.notifications.ActivityWorker { <init>(...); }
-
-# The service and boot receiver are started by the system from the manifest.
--keep class com.instaos.app.notifications.GrowthService { *; }
--keep class com.instaos.app.notifications.BootReceiver { *; }

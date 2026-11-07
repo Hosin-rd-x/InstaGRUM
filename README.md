@@ -1,211 +1,97 @@
-# InstaGRUM
+# InstaOS
 
-An offline Instagram simulator for Android. Post photos, reels and stories, go live, and watch a fake audience react to it in real time.
+A web-session Instagram client for Android — a test-account client built
+on the [InstaGRUM](https://github.com/zyrexdz/InstaGRUM) UI base (MIT).
+It signs in inside Instagram's own page, keeps the session encrypted on
+the device, and reads the feed, stories, profile and messages through
+that session. It is **not** Instagram, and it is not affiliated with
+Meta. Nothing here is simulated: there are no fake followers, no fake
+likes, no fake viewers. Where something is not available yet, the app
+says so instead of inventing it.
 
-There's no account, no server, and no internet permission in the manifest. Everything runs on your phone.
+## What is real
 
-## What it actually does
+- **Sign-in** — WebView login on instagram.com; the `sessionid` cookie
+  is harvested from the WebView's cookie jar and stored encrypted
+  (`EncryptedSharedPreferences`, never in a backup, never on a server).
+- **Home feed** — posts from the logged-in home page (GraphQL /
+  homepage-HTML fallback) with pull-to-refresh and pagination; like,
+  save and comment use the web endpoints.
+- **Stories tray + viewer** — tap a ring to load that person's stories
+  (`feed/reels_media`); the viewer shows the real author and the real
+  view count. The viewer list is not loaded in this version — the
+  insights panel says so plainly.
+- **Reels** — full-screen vertical feed of the feed's videos plus your
+  own local videos; double-tap to like, right rail for like / comments /
+  save / share.
+- **Profile** — your real posts / followers / following from the web
+  session, 3:4 grid, Saved tab, highlights. Local posts you create in
+  the app live alongside them and are labelled as on-device.
+- **DMs** — inbox and threads from the `direct_v2` web endpoints,
+  polled while the screen is open (no push, no realtime). Own messages
+  right-aligned in purple→blue bubbles, received left in grey; date
+  separators; "Seen" receipts where the API returns them; send works
+  (optimistic, with tap-to-retry on failure). End-to-end encrypted
+  threads are listed but cannot be read or sent in this version — the
+  app says so instead of faking them.
+- **Search** — people from `web/search/topsearch`; Explore is your real
+  feed as a 3:4 grid (no fake tiles).
+- **Activity** — unread DMs plus real comments on your posts, on this
+  device. Instagram's full activity feed is not available to a
+  web-session client.
+- **Settings** — dark / light appearance, accent colour (violet, lime,
+  pink, teal), sign out, backup / restore of local data (the login
+  session is never included in a backup).
 
-Most fake-follower apps just make a number go up. This one models how reach works instead.
+## What is deliberately NOT in v1
 
-When you post, it goes out to a slice of your followers plus a slice of strangers through recommendations. Some of them like it. How many like it early decides how many more people see it next. A post that lands keeps spreading, one that doesn't quietly dies off. Post the same thing twice and you'll get different numbers both times.
+- Creating posts / stories / reels on Instagram (the in-app creator
+  makes local-only posts; publishing to Instagram is not wired).
+- Live streaming (real IG Live needs RTMP — nothing streams).
+- Push notifications, realtime DM updates (polling only).
+- Reactions on DM messages, the full viewer list for stories, a
+  profile page for other people (search results open them on
+  instagram.com instead).
+- Posting, commenting or liking from a second account — the app signs
+  in with one test account.
 
-Stories only reach people who already follow you. Posts and reels can reach anyone. That's why a new account can blow up from a single post but gets nothing on stories.
+## Known gaps (honest, not yet verified without a live login)
 
-## Numbers
+- The web feed path is built but not yet proven against a live session:
+  the homepage-HTML feed blob may not exist on the logged-in home page
+  in November 2026, and the feed GraphQL response shape changed
+  (`xdt_api__v1__feed__timeline__connection` instead of the old
+  `edge_web_feed_timeline`). The captured doc_id
+  (`29356681030682853`, `PolarisFeedRootPaginationCachedQuery_subscribe`)
+  is deliberately **not** wired in — posting a guessed query would
+  break the feed outright.
+- The stories-tray GraphQL doc_id is not captured; the tray loads only
+  via `reels_media` after a ring is tapped, and is empty until then.
+- Like / save / follow / comment and DM send endpoints are verified
+  against canned payloads in unit tests only — not against a live
+  session yet.
 
-Sampled from actual runs, not targets written into the code:
+## Build
 
-| Followers | Post after 3 min (Viral) | Live peak (Natural) |
-|---:|---:|---:|
-| 1K | ~1.7K views | ~25 watching |
-| 100K | ~11K views | ~2K watching |
-| 1M | ~96K views | ~18K watching |
-| 10M | ~946K views, ~104K likes | ~120K watching |
-
-## Features
-
-**Growth**
-- 9 pace settings, from Quiet up to Celebrity
-- Early likes and comments feed back into how far a post travels
-- Poisson arrivals, day/night cycle, random quiet and busy stretches
-- Switch pace mid-run and everything you've already posted adapts
-
-**Live**
-- Viewer count rises, dips and settles instead of climbing forever
-- Hype button pulls in a surge of viewers — tap again to turn it off and let the room settle back down
-- Chat scales with room size and reacts to your stream title
-- Gaining followers while streaming raises the room live
-
-**Comments**
-- Reads your caption, location and media type, then picks from 21 topics
-- Beach photo tagged Lisbon gets comments about the water and the city
-- ~1.9 million unique usernames, thousands of comment variations
-- Keyword matching, not an AI model, so it's instant and costs no battery
-
-**Stories**
-- Tap for a photo, hold to record video up to 60 seconds
-- Gone after 24 hours unless you save them to a highlight
-- Impressions, reactions, replies, taps forward and back, profile visits
-- Ring goes grey once you've seen everything, lights up again when you post
-
-**Accounts and data**
-- Multiple profiles, switch from the username menu
-- Each account keeps its own posts, followers and settings
-- Atomic writes with a rotating backup, so a crash mid-save can't corrupt anything
-- Included in Android backup, plus manual export/import to a JSON file
-- Optional foreground service keeps growth running while the app is closed
-
-## Install
-
-Grab `instagrum.apk` from [Releases](https://github.com/zyrexdz/InstaGRUM/releases) and open it on your phone. You'll need to allow installs from unknown sources when it asks.
-
-Needs Android 8.0 or newer.
-
-## Building it yourself
-
-### 1. Install JDK 21
-
-Gradle 8.11 and the Android plugin don't work on JDK 25 yet, so you want 21 specifically.
-
-- **Windows:** `winget install Microsoft.OpenJDK.21`
-- **macOS:** `brew install openjdk@21`
-- **Linux:** `sudo apt install openjdk-21-jdk`
-
-Check it worked:
-
-```bash
-java -version
+```sh
+# JDK 21, Android SDK, Gradle wrapper 8.11.1
+export JAVA_HOME=~/jdk21
+export ANDROID_HOME=~/android-sdk
+./gradlew assembleDebug testDebugUnitTest   # debug + unit tests
+./gradlew assembleRelease                   # release (needs the signing
+                                            # properties at
+                                            # /home/ubuntu/instaos/gradle.properties)
 ```
 
-If that prints something other than 21, point Gradle at the right one:
+Release signing reads the keystore properties from
+`/home/ubuntu/instaos/gradle.properties` on the build machine only.
+No passwords live in this repo; a release build fails if the
+properties file or any key is absent.
 
-```bash
-# macOS / Linux
-export JAVA_HOME=/path/to/jdk-21
+## Attribution
 
-# Windows PowerShell
-$env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-21"
-```
-
-### 2. Install the Android SDK
-
-If you have Android Studio, you already have it and can skip this.
-
-Otherwise download the [command line tools](https://developer.android.com/studio#command-tools), unzip them, and run:
-
-```bash
-sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-sdkmanager --licenses
-```
-
-### 3. Point the project at your SDK
-
-Make a file called `local.properties` in the project root:
-
-```properties
-# Windows
-sdk.dir=C:/Users/YourName/AppData/Local/Android/Sdk
-
-# macOS
-sdk.dir=/Users/YourName/Library/Android/sdk
-
-# Linux
-sdk.dir=/home/YourName/Android/Sdk
-```
-
-Use forward slashes on Windows too. Backslashes need escaping and it's easy to get wrong, which gives you a confusing `volume label syntax is incorrect` error.
-
-This file is gitignored because the path is different on every machine.
-
-### 4. Build
-
-```bash
-git clone https://github.com/zyrexdz/InstaGRUM.git
-cd InstaGRUM
-
-# Linux / macOS only, first time
-chmod +x gradlew
-
-./gradlew assembleDebug
-```
-
-APK lands in `app/build/outputs/apk/debug/`. On Windows use `gradlew.bat` if `./gradlew` doesn't work.
-
-Install it with `adb install -r app/build/outputs/apk/debug/app-debug.apk`, or just copy the file to your phone.
-
-### Release builds
-
-`./gradlew assembleRelease` works out of the box and falls back to the debug key.
-
-If you want your own signing key so you can ship updates without uninstalling:
-
-```bash
-keytool -genkeypair -v -keystore instagrum-release.jks \
-  -keyalg RSA -keysize 4096 -validity 10950 -alias instagrum
-```
-
-Then create `keystore.properties`:
-
-```properties
-storePassword=whatever_you_chose
-keyAlias=instagrum
-keyPassword=whatever_you_chose
-```
-
-Both files are gitignored. **Keep the `.jks` somewhere safe** — lose it and you can't update an installed app, only uninstall and reinstall.
-
-### Tests
-
-```bash
-./gradlew testDebugUnitTest
-```
-
-38 tests covering the growth model, persistence and UI flows.
-
-## Troubleshooting
-
-**`Unsupported class file major version`** — you're on the wrong JDK. Set `JAVA_HOME` to 21.
-
-**`SDK location not found`** — missing `local.properties`, see step 3.
-
-**`volume label syntax is incorrect`** — your `sdk.dir` path is malformed. Use forward slashes.
-
-**`Permission denied` running gradlew** — `chmod +x gradlew`.
-
-**`App not installed` on your phone** — the installed copy was signed with a different key. Uninstall it first, then install again.
-
-**Build hangs on Windows** — a stale daemon. Run `./gradlew --stop` and try again.
-
-## Tech
-
-Kotlin, Jetpack Compose, Material 3, CameraX, Media3, kotlinx.serialization, WorkManager.
-
-Single activity, unidirectional data flow. Every state change goes through a pure reducer, which keeps the simulation deterministic and testable. The engine is seeded, so identical inputs replay to identical results.
-
-```
-model/       state and actions
-data/        reducer, persistence, runtime
-simulation/  growth engine, livestreams, comment generation
-ui/          Compose screens
-```
-
-## What it doesn't do
-
-It won't predict anything. The model is tuned to feel believable, not to forecast what a real account would actually get.
-
-Comments aren't AI-generated. They're keyword matched against your caption and can't see what's in your photos.
-
-Background growth has limits. Android kills foreground services under aggressive battery settings, especially on Samsung. The app asks for a battery exemption, and totals get reconciled when you reopen it either way.
-
-## Disclaimer
-
-Not affiliated with Instagram or Meta. Doesn't connect to Instagram, can't post anywhere, has no access to real accounts. Every person and comment in it is made up and generated on your device.
-
-## License
-
-MIT
-
----
-
-Built by [zyrexdz](https://github.com/zyrexdz)
+UI base: [InstaGRUM](https://github.com/zyrexdz/InstaGRUM) by zyrexdz,
+MIT licence. The simulation, notifications and Live code that shipped
+with it were removed in InstaOS 1.1.0; what remains is the Compose UI
+shell, restyled to the current iOS Instagram look (floating capsule
+tab bar, true-black dark theme, gradient story rings, 3:4 grids).
