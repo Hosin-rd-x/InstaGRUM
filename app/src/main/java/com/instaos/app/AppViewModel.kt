@@ -4,16 +4,23 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.instaos.app.data.ApiResult
+import com.instaos.app.data.DmInboxPage
 import com.instaos.app.data.FeedCache
 import com.instaos.app.data.FeedRepository
 import com.instaos.app.data.SessionStore
-import com.instaos.app.data.SimulatorRuntime
+import com.instaos.app.data.AppRuntime
 import com.instaos.app.data.WebInstagramWebApi
 import com.instaos.app.data.WebSession
 import com.instaos.app.model.Action
 import com.instaos.app.model.Comment
+import com.instaos.app.model.DmMessage
+import com.instaos.app.model.DmMessageStatus
 import com.instaos.app.model.FeedUiState
 import com.instaos.app.model.Post
+import com.instaos.app.model.SearchUiState
+import com.instaos.app.model.StoryTrayItem
+import com.instaos.app.model.toUserRef
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,11 +30,11 @@ import java.io.File
 import java.util.UUID
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
-    private val runtime = SimulatorRuntime.get(application)
+    private val runtime = AppRuntime.get(application)
     val state = runtime.state
     val error = runtime.error
 
-    // ---- Phase 2: web session + home feed (outside the snapshot) ----
+    // ---- Web session + home feed (outside the snapshot) ----
     private val sessionStore = SessionStore.create(application)
     private val api = WebInstagramWebApi()
     private val feedRepository = FeedRepository(
@@ -41,14 +48,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val mutableFeedState = MutableStateFlow(FeedUiState(loading = true))
     val feedState = mutableFeedState.asStateFlow()
 
+    // ---- Direct messages (phase 3): threads live in AppState.dm; the
+    // loading/error flags live here so polling never clobbers the list. ----
+    private val mutableDmLoading = MutableStateFlow(false)
+    val dmLoading = mutableDmLoading.asStateFlow()
+    private val mutableDmError = MutableStateFlow<String?>(null)
+    val dmError = mutableDmError.asStateFlow()
+    private var dmPollJob: Job? = null
+
+    // ---- Search (phase 3): results are in-memory only. ----
+    private val mutableSearchState = MutableStateFlow(SearchUiState())
+    val searchState = mutableSearchState.asStateFlow()
+    private var searchJob: Job? = null
+
+    // ---- Tray-story loading errors (shown once, then cleared). ----
+    private val mutableStoryError = MutableStateFlow<String?>(null)
+    val storyError = mutableStoryError.asStateFlow()
+
     init {
         viewModelScope.launch { runtime.load() }
-        viewModelScope.launch {
-            while (isActive) {
-                delay(500)
-                if (runtime.foreground) runtime.tick()
-            }
-        }
         // If a session survived, warm the feed from the cache immediately
         // (no network call when the cache is fresh) and refresh in the
         // background when it is stale.
@@ -92,10 +110,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Sign out: forget the session cookie; the local profile is kept. */
     fun logout() {
+        stopDmPolling()
         sessionStore.clear()
         mutableSession.value = null
         mutableOfflineMode.value = false
         mutableFeedState.value = FeedUiState(error = FeedRepository.NOT_SIGNED_IN)
+        mutableDmError.value = null
         dispatch(Action.Logout)
     }
 
@@ -185,13 +205,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val me = state.value?.profile
         val comment = Comment(
             id = "local-${UUID.randomUUID()}",
-            person = com.instaos.app.model.FakePerson(
-                "self",
-                me?.username.orEmpty(),
-                me?.displayName.orEmpty(),
-                me?.avatar.orEmpty(),
-                verified = me?.verified == true,
-            ),
+            person = me?.toUserRef() ?: com.instaos.app.model.UserRef("self", ""),
             text = text.trim().take(2000),
             createdAt = System.currentTimeMillis(),
             parentId = parentId,
@@ -213,6 +227,248 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+    }
+
+    // ---- Direct messages (phase 3) ----
+
+    fun refreshDmInbox(quiet: Boolean = false) {
+        val session = mutableSession.value
+        if (session == null || !session.isLoggedIn) {
+            if (!quiet) mutableDmError.value = "Sign in to see your messages."
+            return
+        }
+        viewModelScope.launch {
+            if (!quiet) {
+                mutableDmLoading.value = true
+                mutableDmError.value = null
+            }
+            when (val result = api.getDmInbox(session)) {
+                is ApiResult.Success -> {
+                    val page: DmInboxPage = result.value
+                    dispatch(Action.DmInboxLoaded(page.threads))
+                    if (!quiet) mutableDmError.value = null
+                }
+                is ApiResult.RateLimited -> {
+                    if (!quiet) mutableDmError.value = "Instagram asked us to slow down. Try again in a bit."
+                }
+                is ApiResult.HttpError -> {
+                    if (!quiet) mutableDmError.value =
+                        if (result.code == 0) result.message
+                        else "Instagram answered ${result.code}. Your saved messages are shown, if any."
+                }
+                is ApiResult.NetworkError -> {
+                    if (!quiet) mutableDmError.value = "No connection. Your saved messages are shown, if any."
+                }
+            }
+            if (!quiet) mutableDmLoading.value = false
+        }
+    }
+
+    fun loadDmThread(threadId: String, quiet: Boolean = false) {
+        val session = mutableSession.value
+        if (session == null || !session.isLoggedIn) {
+            if (!quiet) mutableDmError.value = "Sign in to see your messages."
+            return
+        }
+        viewModelScope.launch {
+            if (!quiet) {
+                mutableDmLoading.value = true
+                mutableDmError.value = null
+            }
+            when (val result = api.getDmThread(session, threadId)) {
+                is ApiResult.Success -> {
+                    val page = result.value
+                    dispatch(Action.DmThreadLoaded(page.thread, page.messages))
+                    dispatch(Action.DmThreadRead(threadId))
+                    if (!quiet) mutableDmError.value = null
+                    // Best-effort "seen": mark the newest message from the
+                    // other side as seen. A failure here is silent — the
+                    // thread still reads fine.
+                    val newestOther = page.messages.firstOrNull { !it.own }
+                    if (newestOther != null) {
+                        runCatching { api.markDmThreadSeen(session, threadId, newestOther.id) }
+                    }
+                }
+                is ApiResult.RateLimited -> {
+                    if (!quiet) mutableDmError.value = "Instagram asked us to slow down. Try again in a bit."
+                }
+                is ApiResult.HttpError -> {
+                    if (!quiet) mutableDmError.value =
+                        if (result.code == 0) result.message
+                        else "Instagram answered ${result.code}."
+                }
+                is ApiResult.NetworkError -> {
+                    if (!quiet) mutableDmError.value = "No connection."
+                }
+            }
+            if (!quiet) mutableDmLoading.value = false
+        }
+    }
+
+    /** Send a text message, optimistically appended, then confirmed or failed. */
+    fun sendDmMessage(threadId: String, text: String) {
+        val session = mutableSession.value ?: return
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return
+        val me = state.value?.profile?.toUserRef() ?: com.instaos.app.model.UserRef("self", "")
+        val tempId = "local-${UUID.randomUUID()}"
+        val optimistic = DmMessage(
+            id = tempId,
+            threadId = threadId,
+            sender = me,
+            text = trimmed.take(2000),
+            createdAt = System.currentTimeMillis(),
+            own = true,
+            status = DmMessageStatus.SENDING,
+        )
+        dispatch(Action.DmMessageAppended(optimistic))
+        viewModelScope.launch {
+            when (val result = api.sendDm(session, threadId, trimmed)) {
+                is ApiResult.Success -> {
+                    dispatch(Action.DmMessageUpdated(threadId, tempId, result.value))
+                }
+                else -> {
+                    dispatch(
+                        Action.DmMessageUpdated(
+                            threadId,
+                            tempId,
+                            optimistic.copy(status = DmMessageStatus.FAILED),
+                        )
+                    )
+                    mutableDmError.value = "Message did not send. Tap it to try again."
+                }
+            }
+        }
+    }
+
+    /** Retry a failed message (same text, new attempt). */
+    fun retryDmMessage(threadId: String, message: DmMessage) {
+        dispatch(
+            Action.DmMessageUpdated(
+                threadId,
+                message.id,
+                message.copy(status = DmMessageStatus.SENDING),
+            )
+        )
+        sendDmMessage(threadId, message.text)
+    }
+
+    /**
+     * Gentle polling while a DM screen is visible: inbox every 60 s, an
+     * open thread every 30 s. No push, no realtime — this is the whole
+     * freshness story for v1, and the throttler still paces every call.
+     */
+    fun startDmPolling(threadId: String?) {
+        stopDmPolling()
+        if (mutableSession.value?.isLoggedIn != true) return
+        dmPollJob = viewModelScope.launch {
+            while (isActive) {
+                delay(if (threadId == null) 60_000 else 30_000)
+                if (threadId == null) refreshDmInbox(quiet = true)
+                else loadDmThread(threadId, quiet = true)
+            }
+        }
+    }
+
+    fun stopDmPolling() {
+        dmPollJob?.cancel()
+        dmPollJob = null
+    }
+
+    // ---- Stories tray (phase 3) ----
+
+    /** Load one tray user's stories and open the viewer on the first one. */
+    fun openTrayStory(item: StoryTrayItem) {
+        val session = mutableSession.value
+        if (session == null || !session.isLoggedIn) {
+            mutableStoryError.value = "Sign in to watch stories."
+            return
+        }
+        mutableStoryError.value = null
+        viewModelScope.launch {
+            when (val result = api.getStoryMedia(session, listOf(item.user.id))) {
+                is ApiResult.Success -> {
+                    val stories = result.value
+                    if (stories.isEmpty()) {
+                        mutableStoryError.value = "No story to show for ${item.user.username} right now."
+                    } else {
+                        dispatch(Action.AddStories(stories))
+                        dispatch(Action.OpenStory(stories.first().id))
+                    }
+                }
+                is ApiResult.RateLimited -> {
+                    mutableStoryError.value = "Instagram asked us to slow down. Try again in a bit."
+                }
+                is ApiResult.HttpError -> {
+                    mutableStoryError.value =
+                        if (result.code == 0) result.message
+                        else "Instagram answered ${result.code}."
+                }
+                is ApiResult.NetworkError -> {
+                    mutableStoryError.value = "No connection."
+                }
+            }
+        }
+    }
+
+    fun clearStoryError() {
+        mutableStoryError.value = null
+    }
+
+    // ---- Search (phase 3) ----
+
+    /** User search with a short debounce; results are in-memory only. */
+    fun searchUsers(query: String) {
+        searchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) {
+            mutableSearchState.value = SearchUiState()
+            return
+        }
+        mutableSearchState.value = mutableSearchState.value.copy(query = trimmed, loading = true, error = null)
+        searchJob = viewModelScope.launch {
+            delay(500)
+            val session = mutableSession.value
+            if (session == null || !session.isLoggedIn) {
+                mutableSearchState.value = mutableSearchState.value.copy(
+                    loading = false,
+                    error = "Sign in to search.",
+                )
+                return@launch
+            }
+            when (val result = api.searchUsers(session, trimmed)) {
+                is ApiResult.Success -> {
+                    mutableSearchState.value = mutableSearchState.value.copy(
+                        results = result.value,
+                        loading = false,
+                        error = null,
+                    )
+                }
+                is ApiResult.RateLimited -> {
+                    mutableSearchState.value = mutableSearchState.value.copy(
+                        loading = false,
+                        error = "Instagram asked us to slow down. Try again in a bit.",
+                    )
+                }
+                is ApiResult.HttpError -> {
+                    mutableSearchState.value = mutableSearchState.value.copy(
+                        loading = false,
+                        error = if (result.code == 0) result.message else "Instagram answered ${result.code}.",
+                    )
+                }
+                is ApiResult.NetworkError -> {
+                    mutableSearchState.value = mutableSearchState.value.copy(
+                        loading = false,
+                        error = "No connection.",
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearSearch() {
+        searchJob?.cancel()
+        mutableSearchState.value = SearchUiState()
     }
 
     fun exportBackup(target: android.net.Uri, context: android.content.Context, onResult: (String) -> Unit) {
@@ -247,5 +503,4 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setForeground(active: Boolean) = runtime.setForeground(active)
-    fun openNotification(id: String) = dispatch(Action.OpenActivity(id))
 }

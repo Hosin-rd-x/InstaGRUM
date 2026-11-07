@@ -1,9 +1,13 @@
 package com.instaos.app.data
 
+import com.instaos.app.model.DmMessage
+import com.instaos.app.model.DmMessageStatus
+import com.instaos.app.model.DmThread
 import com.instaos.app.model.FeedPage
 import com.instaos.app.model.Post
 import com.instaos.app.model.Media
 import com.instaos.app.model.MediaKind
+import com.instaos.app.model.Story
 import com.instaos.app.model.StoryTrayItem
 import com.instaos.app.model.UserRef
 import kotlinx.coroutines.Dispatchers
@@ -11,10 +15,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.booleanOrNull
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.UUID
 
 /**
  * Results from the Instagram web session layer.
@@ -30,8 +42,22 @@ sealed interface ApiResult<out T> {
     data class RateLimited(val retryAfterSeconds: Long?) : ApiResult<Nothing>
 }
 
+/** One page of a DM thread: the thread itself plus its messages. */
+data class DmThreadPage(
+    val thread: DmThread,
+    val messages: List<DmMessage>,
+    val nextCursor: String? = null,
+    val hasMore: Boolean = false,
+)
+
+/** The DM inbox: threads plus Instagram's own total unread count. */
+data class DmInboxPage(
+    val threads: List<DmThread>,
+    val unseenCount: Int = 0,
+)
+
 /**
- * The Instagram web-session client (phase 2, audit §8 step 2).
+ * The Instagram web-session client (phase 2 feed, phase 3 DM/search/stories).
  *
  * This is the ONLY layer that knows about Instagram endpoints. UI and the
  * reducer depend on this interface, never on [WebInstagramWebApi], so unit
@@ -48,6 +74,10 @@ sealed interface ApiResult<out T> {
  *   GraphQL `doc_id`s rotate with Instagram's deploys; [GraphQlDocIds]
  *   must be captured from a live logged-in browser session (phase 3, on
  *   the phone). Until then the homepage path is the default.
+ * - DM uses the `direct_v2` endpoints the web session already carries
+ *   cookies for, with polling only — no push, no realtime MQTT. A thread
+ *   Instagram marks end-to-end encrypted (`is_e2ee`) is reported as such
+ *   and never faked: the UI says so plainly.
  * - No login happens here: there is no password anywhere in this app.
  * - Every call is throttled ([Throttler]) and 429s back off.
  */
@@ -59,6 +89,18 @@ interface InstagramWebApi {
     suspend fun savePost(session: WebSession, mediaId: String, save: Boolean): ApiResult<Unit>
     suspend fun followUser(session: WebSession, userId: String, follow: Boolean): ApiResult<Unit>
     suspend fun addComment(session: WebSession, mediaId: String, text: String, parentId: String?): ApiResult<Unit>
+    /** DM inbox (polling only). */
+    suspend fun getDmInbox(session: WebSession): ApiResult<DmInboxPage>
+    /** One DM thread, newest messages first. */
+    suspend fun getDmThread(session: WebSession, threadId: String, cursor: String? = null): ApiResult<DmThreadPage>
+    /** Send a text message; returns the sent message as Instagram echoed it. */
+    suspend fun sendDm(session: WebSession, threadId: String, text: String): ApiResult<DmMessage>
+    /** Best-effort "seen" marker; failures are swallowed by the caller. */
+    suspend fun markDmThreadSeen(session: WebSession, threadId: String, itemId: String): ApiResult<Unit>
+    /** Story media for tray reels (`reels_media`), as [Story] objects. */
+    suspend fun getStoryMedia(session: WebSession, reelIds: List<String>): ApiResult<List<Story>>
+    /** User search (`topsearch`), users only. */
+    suspend fun searchUsers(session: WebSession, query: String): ApiResult<List<UserRef>>
 }
 
 /** Fake implementation for unit tests and offline previews. No network, no login. */
@@ -66,6 +108,10 @@ class FakeInstagramWebApi(
     private val feed: FeedPage = FeedPage(),
     private val tray: List<StoryTrayItem> = emptyList(),
     private val currentUser: UserRef = UserRef("0", "test.user"),
+    private val inbox: DmInboxPage = DmInboxPage(emptyList()),
+    private val thread: DmThreadPage? = null,
+    private val searchResults: List<UserRef> = emptyList(),
+    private val storyMedia: List<Story> = emptyList(),
 ) : InstagramWebApi {
     override suspend fun getHomeFeed(session: WebSession, cursor: String?): ApiResult<FeedPage> =
         ApiResult.Success(feed)
@@ -91,6 +137,38 @@ class FakeInstagramWebApi(
         text: String,
         parentId: String?,
     ): ApiResult<Unit> = ApiResult.Success(Unit)
+
+    override suspend fun getDmInbox(session: WebSession): ApiResult<DmInboxPage> =
+        ApiResult.Success(inbox)
+
+    override suspend fun getDmThread(
+        session: WebSession,
+        threadId: String,
+        cursor: String?,
+    ): ApiResult<DmThreadPage> =
+        ApiResult.Success(thread ?: DmThreadPage(DmThread(threadId), emptyList()))
+
+    override suspend fun sendDm(session: WebSession, threadId: String, text: String): ApiResult<DmMessage> =
+        ApiResult.Success(
+            DmMessage(
+                id = "fake-${UUID.randomUUID()}",
+                threadId = threadId,
+                sender = currentUser,
+                text = text,
+                createdAt = System.currentTimeMillis(),
+                own = true,
+                status = DmMessageStatus.SENT,
+            )
+        )
+
+    override suspend fun markDmThreadSeen(session: WebSession, threadId: String, itemId: String): ApiResult<Unit> =
+        ApiResult.Success(Unit)
+
+    override suspend fun getStoryMedia(session: WebSession, reelIds: List<String>): ApiResult<List<Story>> =
+        ApiResult.Success(storyMedia)
+
+    override suspend fun searchUsers(session: WebSession, query: String): ApiResult<List<UserRef>> =
+        ApiResult.Success(searchResults)
 }
 
 /**
@@ -99,6 +177,19 @@ class FakeInstagramWebApi(
  * session (DevTools → Network → graphql/query → doc_id) and fill them in
  * here. Null means "that query is unavailable; use the fallback or an
  * empty result, never a guessed id".
+ *
+ * Phase-3 finding (2026-11-07, from the PUBLIC logged-out JS bundles on
+ * static.cdninstagram.com — no login): the current web feed query is
+ * `PolarisFeedRootPaginationCachedQuery_subscribe`, doc_id
+ * `29356681030682853`, and its root field is
+ * `xdt_api__v1__feed__timeline__connection` — NOT the
+ * `data.user.edge_web_feed_timeline` shape the phase-2 parser expects.
+ * The plain (non-subscribe) feed query artifact and its variables could
+ * NOT be captured from the logged-out bundles (they load only after
+ * sign-in), so the doc_id is deliberately NOT wired in here: posting a
+ * guessed query + variables would break the feed outright, while the
+ * homepage-HTML fallback still has a chance. Capture the live values on
+ * the phone and fill them in then — and re-check the response shape first.
  */
 data class GraphQlDocIds(
     /** `PolarisFeedRootPaginationCachedQuery` — the home-feed query. */
@@ -115,6 +206,7 @@ class WebInstagramWebApi(
     companion object {
         const val IG_APP_ID = "936619743392459"
         const val BASE = "https://www.instagram.com"
+        const val API_BASE = "https://i.instagram.com"
         const val BROWSER_UA =
             "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
 
@@ -198,6 +290,218 @@ class WebInstagramWebApi(
             }
             return null
         }
+
+        // ---- direct_v2 parsing (pure, unit-tested) ----
+
+        /** direct_v2 timestamps are microseconds since epoch. */
+        private fun microsToMs(value: JsonElement?): Long =
+            (value?.jsonPrimitive?.longOrNull ?: 0L) / 1_000
+
+        private fun JsonObject.string(key: String): String =
+            (this[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+
+        private fun JsonObject.bool(key: String): Boolean =
+            (this[key] as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull == true
+
+        private fun JsonObject.long(key: String): Long =
+            (this[key] as? kotlinx.serialization.json.JsonPrimitive)?.longOrNull ?: 0L
+
+        private fun parseDirectUser(obj: JsonObject): UserRef = UserRef(
+            id = obj.string("pk").ifBlank { obj.string("id") },
+            username = obj.string("username"),
+            displayName = obj.string("full_name"),
+            avatarUrl = obj.string("profile_pic_url"),
+            verified = obj.bool("is_verified"),
+        )
+
+        /** Human preview for a non-text DM item — never the raw `item_type`. */
+        fun dmItemPreview(itemType: String, item: JsonObject): String = when (itemType) {
+            "text" -> item.string("text")
+            "media" -> if (item.long("media_type") == 2L) "Video" else "Photo"
+            "like" -> "Liked a message"
+            "reel_share" -> "Shared a reel"
+            "media_share" -> "Shared a post"
+            "link" -> "Shared a link"
+            "voice_media" -> "Voice message"
+            "action_log" -> item.get("action_log")?.jsonObject?.string("description")?.ifBlank { "…" } ?: "…"
+            "story_share" -> "Shared a story"
+            "felix_share" -> "Shared a video"
+            "placeholder" -> "Message unavailable"
+            else -> "Message"
+        }
+
+        /**
+         * Parse a `direct_v2/inbox` response. Per-thread unread is derived
+         * honestly: 1 when the last message is from someone else and newer
+         * than what the viewer last saw, else 0 (Instagram gives no
+         * per-thread unread count in this payload; the totals come from
+         * `unseen_count`).
+         */
+        fun parseDmInboxResponse(body: String, viewerId: String): DmInboxPage? {
+            val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+            val inbox = root["inbox"]?.jsonObject ?: return null
+            val unseen = inbox.long("unseen_count").toInt()
+            val threads = inbox["threads"]?.jsonArray?.mapNotNull { element ->
+                val t = element.jsonObject
+                val threadId = t.string("thread_id")
+                if (threadId.isBlank()) return@mapNotNull null
+                val users = t["users"]?.jsonArray?.mapNotNull {
+                    runCatching { parseDirectUser(it.jsonObject) }.getOrNull()
+                }.orEmpty()
+                val last = t["last_permanent_item"]?.jsonObject
+                val lastType = last?.string("item_type").orEmpty()
+                val lastText = if (last != null) dmItemPreview(lastType, last) else ""
+                val lastAt = microsToMs(last?.get("timestamp"))
+                val lastFrom = last?.string("user_id").orEmpty()
+                val seenAt = t["last_seen_at"]?.jsonObject
+                val mySeenAt = seenAt?.get(viewerId)?.jsonObject?.let { microsToMs(it["timestamp"]) } ?: 0L
+                val otherSeenItem = seenAt?.entries
+                    ?.firstOrNull { it.key != viewerId && it.key.isNotBlank() }
+                    ?.value?.jsonObject?.string("item_id").orEmpty()
+                val unread = if (lastAt > 0 && lastFrom.isNotBlank() && lastFrom != viewerId && lastAt > mySeenAt) 1 else 0
+                val title = t.string("thread_title").ifBlank {
+                    users.joinToString(", ") { it.username.ifBlank { it.displayName } }
+                }
+                DmThread(
+                    threadId = threadId,
+                    participants = users,
+                    title = title,
+                    lastMessage = lastText,
+                    lastMessageAt = lastAt,
+                    unreadCount = unread,
+                    isGroup = t.bool("is_group"),
+                    e2ee = t.bool("is_e2ee"),
+                    seenItemId = otherSeenItem,
+                )
+            }.orEmpty()
+            return DmInboxPage(threads, unseen)
+        }
+
+        /** Parse a `direct_v2/threads/{id}` response. */
+        fun parseDmThreadResponse(body: String, viewerId: String): DmThreadPage? {
+            val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+            val t = root["thread"]?.jsonObject ?: return null
+            val threadId = t.string("thread_id")
+            if (threadId.isBlank()) return null
+            val users = t["users"]?.jsonArray?.mapNotNull {
+                runCatching { parseDirectUser(it.jsonObject) }.getOrNull()
+            }.orEmpty()
+            val seenAt = t["last_seen_at"]?.jsonObject
+            val otherSeenItem = seenAt?.entries
+                ?.firstOrNull { it.key != viewerId && it.key.isNotBlank() }
+                ?.value?.jsonObject?.string("item_id").orEmpty()
+            val last = t["last_permanent_item"]?.jsonObject
+            val lastType = last?.string("item_type").orEmpty()
+            val messages = t["items"]?.jsonArray?.mapNotNull { element ->
+                val item = element.jsonObject
+                val itemId = item.string("item_id")
+                if (itemId.isBlank()) return@mapNotNull null
+                val itemType = item.string("item_type").ifBlank { "text" }
+                val senderId = item.string("user_id")
+                val sender = users.find { it.id == senderId }
+                    ?: UserRef(id = senderId, username = if (senderId == viewerId) "you" else "")
+                DmMessage(
+                    id = itemId,
+                    threadId = threadId,
+                    sender = sender,
+                    text = dmItemPreview(itemType, item),
+                    createdAt = microsToMs(item["timestamp"]),
+                    own = senderId == viewerId,
+                    status = DmMessageStatus.SENT,
+                    itemType = itemType,
+                )
+            }.orEmpty().sortedByDescending { it.createdAt }
+            val thread = DmThread(
+                threadId = threadId,
+                participants = users,
+                title = t.string("thread_title").ifBlank {
+                    users.joinToString(", ") { it.username.ifBlank { it.displayName } }
+                },
+                lastMessage = messages.firstOrNull()?.text
+                    ?: if (last != null) dmItemPreview(lastType, last) else "",
+                lastMessageAt = messages.firstOrNull()?.createdAt ?: microsToMs(last?.get("timestamp")),
+                unreadCount = 0,
+                isGroup = t.bool("is_group"),
+                e2ee = t.bool("is_e2ee"),
+                seenItemId = otherSeenItem,
+            )
+            return DmThreadPage(
+                thread = thread,
+                messages = messages,
+                nextCursor = t.string("next_cursor").ifBlank { null },
+                hasMore = t.bool("has_older"),
+            )
+        }
+
+        /** Parse the `payload` of a successful `broadcast/text` send. */
+        fun parseDmSendResponse(body: String, threadId: String, viewerId: String, text: String): DmMessage? {
+            val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+            val payload = root["payload"]?.jsonObject ?: return null
+            val itemId = payload.string("item_id")
+            if (itemId.isBlank()) return null
+            val timestamp = microsToMs(payload["timestamp"])
+            return DmMessage(
+                id = itemId,
+                threadId = threadId,
+                sender = UserRef(id = viewerId, username = ""),
+                text = payload.string("text").ifBlank { text },
+                createdAt = if (timestamp > 0) timestamp else System.currentTimeMillis(),
+                own = true,
+                status = DmMessageStatus.SENT,
+                itemType = payload.string("item_type").ifBlank { "text" },
+            )
+        }
+
+        /** Parse a `feed/reels_media` response into [Story] objects. */
+        fun parseStoryMediaResponse(body: String): List<Story>? {
+            val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+            val reels = root["reels"]?.jsonObject ?: return null
+            val stories = mutableListOf<Story>()
+            for ((_, reelElement) in reels) {
+                val reel = reelElement.jsonObject
+                val user = reel["user"]?.jsonObject?.let { parseDirectUser(it) } ?: continue
+                val items = reel["items"]?.jsonArray.orEmpty()
+                for (itemElement in items) {
+                    val item = itemElement.jsonObject
+                    val id = item.string("id")
+                    if (id.isBlank()) continue
+                    val mediaType = item.long("media_type")
+                    val isVideo = mediaType == 2L
+                    val url = if (isVideo) {
+                        item["video_versions"]?.jsonArray?.firstOrNull()?.jsonObject?.string("url").orEmpty()
+                    } else {
+                        item["image_versions2"]?.jsonObject?.get("candidates")?.jsonArray
+                            ?.mapNotNull { it.jsonObject }
+                            ?.maxByOrNull { it.long("width") }
+                            ?.string("url").orEmpty()
+                    }
+                    if (url.isBlank()) continue
+                    val caption = item["caption"]?.jsonObject?.string("text").orEmpty()
+                    val takenAt = item.long("taken_at")
+                    val expiringAt = item.long("expiring_at")
+                    stories += Story(
+                        id = id,
+                        media = Media(path = url, kind = if (isVideo) MediaKind.VIDEO else MediaKind.IMAGE),
+                        caption = caption,
+                        createdAt = takenAt * 1_000,
+                        expiresAt = if (expiringAt > 0) expiringAt * 1_000 else takenAt * 1_000 + 86_400_000,
+                        author = user,
+                    )
+                }
+            }
+            return stories
+        }
+
+        /** Parse a `web/search/topsearch` response (users only). */
+        fun parseSearchResponse(body: String): List<UserRef>? {
+            val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+            val users = root["users"]?.jsonArray ?: return emptyList()
+            return users.mapNotNull { element ->
+                val user = element.jsonObject["user"]?.jsonObject ?: return@mapNotNull null
+                val ref = parseDirectUser(user)
+                if (ref.username.isBlank()) null else ref
+            }
+        }
     }
 
     // ---- Web GraphQL response DTOs (only the fields we read) ----
@@ -280,6 +584,7 @@ class WebInstagramWebApi(
                 likes = edge_liked_by?.count ?: 0,
                 commentCount = edge_media_to_comment?.count ?: 0,
                 author = ownerRef,
+                shortcode = shortcode,
             )
         }
     }
@@ -424,13 +729,20 @@ class WebInstagramWebApi(
                 is ApiResult.Success -> {
                     parseFeedResponse(result.value.body)
                         ?.let { ApiResult.Success(it) }
-                        ?: ApiResult.HttpError(0, "Instagram's feed answer could not be read (it may have changed shape).")
+                        ?: homePageFeedFallback(session)
                 }
                 else -> result.mapError()
             }
         }
         // No GraphQL doc_id configured: read the feed JSON embedded in the
         // logged-in homepage instead (best effort; see class doc).
+        return homePageFeedFallback(session)
+    }
+
+    /** Homepage-HTML feed path, used when no GraphQL doc_id is configured
+     *  or when the GraphQL answer could not be read (Instagram changed
+     *  shape — fall back instead of failing outright). */
+    private suspend fun homePageFeedFallback(session: WebSession): ApiResult<FeedPage> {
         val result = paced { request(url = "$BASE/", session = session) }
         return when (result) {
             is ApiResult.Success -> {
@@ -467,7 +779,7 @@ class WebInstagramWebApi(
     }
 
     override suspend fun getCurrentUser(session: WebSession): ApiResult<UserRef> {
-        val result = paced { request(url = "https://i.instagram.com/api/v1/accounts/current_user/", session = session) }
+        val result = paced { request(url = "$API_BASE/api/v1/accounts/current_user/", session = session) }
         when (result) {
             is ApiResult.Success -> {
                 val parsed = runCatching { json.decodeFromString<CurrentUserResponse>(result.value.body) }.getOrNull()
@@ -537,5 +849,119 @@ class WebInstagramWebApi(
         val params = mutableMapOf("comment_text" to text)
         if (!parentId.isNullOrBlank()) params["replied_to_comment_id"] = parentId
         return webPost(session, "/web/comments/$mediaId/add/", params)
+    }
+
+    // ---- Direct messages (phase 3) ----
+
+    override suspend fun getDmInbox(session: WebSession): ApiResult<DmInboxPage> {
+        val result = paced {
+            request(
+                url = "$API_BASE/api/v1/direct_v2/inbox/?persistentBadging=true&folder=&limit=20&thread_message_limit=5",
+                session = session,
+            )
+        }
+        return when (result) {
+            is ApiResult.Success -> {
+                parseDmInboxResponse(result.value.body, session.dsUserId)
+                    ?.let { ApiResult.Success(it) }
+                    ?: ApiResult.HttpError(0, "Instagram's inbox answer could not be read (it may have changed shape).")
+            }
+            else -> result.mapError()
+        }
+    }
+
+    override suspend fun getDmThread(
+        session: WebSession,
+        threadId: String,
+        cursor: String?,
+    ): ApiResult<DmThreadPage> {
+        val cursorParam = if (cursor.isNullOrBlank()) "" else "&cursor=${URLEncoder.encode(cursor, "UTF-8")}"
+        val result = paced {
+            request(
+                url = "$API_BASE/api/v1/direct_v2/threads/$threadId/?limit=20$cursorParam",
+                session = session,
+            )
+        }
+        return when (result) {
+            is ApiResult.Success -> {
+                parseDmThreadResponse(result.value.body, session.dsUserId)
+                    ?.let { ApiResult.Success(it) }
+                    ?: ApiResult.HttpError(0, "Instagram's thread answer could not be read (it may have changed shape).")
+            }
+            else -> result.mapError()
+        }
+    }
+
+    override suspend fun sendDm(session: WebSession, threadId: String, text: String): ApiResult<DmMessage> {
+        val token = UUID.randomUUID().toString()
+        val result = paced {
+            request(
+                url = "$API_BASE/api/v1/direct_v2/threads/$threadId/broadcast/text/",
+                session = session,
+                method = "POST",
+                formParams = mapOf(
+                    "text" to text,
+                    "mutation_token" to token,
+                    "client_context" to token,
+                ),
+            )
+        }
+        return when (result) {
+            is ApiResult.Success -> {
+                parseDmSendResponse(result.value.body, threadId, session.dsUserId, text)
+                    ?.let { ApiResult.Success(it) }
+                    ?: ApiResult.HttpError(0, "Instagram accepted the message but its answer could not be read.")
+            }
+            else -> result.mapError()
+        }
+    }
+
+    override suspend fun markDmThreadSeen(session: WebSession, threadId: String, itemId: String): ApiResult<Unit> {
+        val result = paced {
+            request(
+                url = "$API_BASE/api/v1/direct_v2/threads/$threadId/items/$itemId/seen/",
+                session = session,
+                method = "POST",
+                formParams = emptyMap(),
+            )
+        }
+        return when (result) {
+            is ApiResult.Success -> ApiResult.Success(Unit)
+            else -> result.mapError()
+        }
+    }
+
+    override suspend fun getStoryMedia(session: WebSession, reelIds: List<String>): ApiResult<List<Story>> {
+        if (reelIds.isEmpty()) return ApiResult.Success(emptyList())
+        val query = reelIds.joinToString("&") { "reel_ids=${URLEncoder.encode(it, "UTF-8")}" }
+        val result = paced {
+            request(url = "$API_BASE/api/v1/feed/reels_media/?$query", session = session)
+        }
+        return when (result) {
+            is ApiResult.Success -> {
+                parseStoryMediaResponse(result.value.body)
+                    ?.let { ApiResult.Success(it) }
+                    ?: ApiResult.HttpError(0, "Instagram's story answer could not be read (it may have changed shape).")
+            }
+            else -> result.mapError()
+        }
+    }
+
+    override suspend fun searchUsers(session: WebSession, query: String): ApiResult<List<UserRef>> {
+        if (query.isBlank()) return ApiResult.Success(emptyList())
+        val result = paced {
+            request(
+                url = "$BASE/web/search/topsearch/?query=${URLEncoder.encode(query.trim(), "UTF-8")}",
+                session = session,
+            )
+        }
+        return when (result) {
+            is ApiResult.Success -> {
+                parseSearchResponse(result.value.body)
+                    ?.let { ApiResult.Success(it) }
+                    ?: ApiResult.HttpError(0, "Instagram's search answer could not be read (it may have changed shape).")
+            }
+            else -> result.mapError()
+        }
     }
 }

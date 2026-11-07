@@ -36,3 +36,11 @@ data class FeedUiState(
     val error: String? = null,
     val lastUpdatedAt: Long = 0,
 )
+
+/** In-memory UI state for the Search screen (never persisted). */
+data class SearchUiState(
+    val query: String = "",
+    val results: List<UserRef> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+)
