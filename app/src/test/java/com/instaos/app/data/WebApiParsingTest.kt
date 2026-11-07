@@ -103,4 +103,128 @@ class WebApiParsingTest {
     fun homePageWithoutFeedDataYieldsNull() {
         assertNull(WebInstagramWebApi.parseFeedFromHomePageHtml("<html>login page</html>"))
     }
+
+    // ---- Phase 3: DM / story / search parsers, canned payloads ----
+
+    private val dmInboxJson = """
+        {"inbox":{"unseen_count":2,"threads":[
+          {"thread_id":"t1","thread_title":"","is_group":false,"is_e2ee":false,
+           "users":[{"pk":10,"username":"friend","full_name":"Friend","profile_pic_url":"https://cdn.example.com/a.jpg","is_verified":false}],
+           "last_permanent_item":{"item_id":"m9","user_id":"10","timestamp":1730000000000000,"item_type":"text","text":"hey there"},
+           "last_seen_at":{"9":{"timestamp":1729999990000000,"item_id":"m8"}}},
+          {"thread_id":"t2","thread_title":"Group","is_group":true,"is_e2ee":true,
+           "users":[{"pk":11,"username":"pal","full_name":"Pal","profile_pic_url":"","is_verified":false}],
+           "last_seen_at":{}}
+        ],"has_older":false},"status":"ok"}
+    """.trimIndent()
+
+    private val dmThreadJson = """
+        {"thread":{"thread_id":"t1","thread_title":"","is_group":false,"is_e2ee":false,
+          "users":[{"pk":10,"username":"friend","full_name":"Friend","profile_pic_url":"","is_verified":false}],
+          "last_seen_at":{"10":{"timestamp":1730000002000000,"item_id":"m2"}},
+          "items":[
+            {"item_id":"m1","user_id":"10","timestamp":1730000001000000,"item_type":"text","text":"hi"},
+            {"item_id":"m2","user_id":"9","timestamp":1730000002000000,"item_type":"text","text":"hello"},
+            {"item_id":"m3","user_id":"10","timestamp":1730000003000000,"item_type":"like"},
+            {"item_id":"m4","user_id":"10","timestamp":1730000004000000,"item_type":"reel_share"}
+          ],
+          "has_older":false},"status":"ok"}
+    """.trimIndent()
+
+    @Test
+    fun dmInboxParsesThreadsUnreadAndE2ee() {
+        val page = WebInstagramWebApi.parseDmInboxResponse(dmInboxJson, viewerId = "9")
+        assertNotNull(page)
+        assertEquals(2, page!!.unseenCount)
+        assertEquals(2, page.threads.size)
+        val oneToOne = page.threads[0]
+        assertEquals("t1", oneToOne.threadId)
+        assertEquals("friend", oneToOne.title)
+        assertEquals("hey there", oneToOne.lastMessage)
+        assertEquals(1_730_000_000_000L, oneToOne.lastMessageAt)
+        // The last message is from someone else and newer than my last-seen.
+        assertEquals(1, oneToOne.unreadCount)
+        assertFalse(oneToOne.e2ee)
+        val encrypted = page.threads[1]
+        assertTrue(encrypted.e2ee)
+        assertTrue(encrypted.isGroup)
+        assertEquals(0, encrypted.unreadCount)
+    }
+
+    @Test
+    fun dmThreadParsesMessagesNewestFirstWithOwnFlag() {
+        val page = WebInstagramWebApi.parseDmThreadResponse(dmThreadJson, viewerId = "9")
+        assertNotNull(page)
+        assertEquals(4, page!!.messages.size)
+        // Newest first: m4 (reel share), m3 (like), m2 (own), m1.
+        assertEquals("m4", page.messages[0].id)
+        assertEquals("m3", page.messages[1].id)
+        assertEquals("m2", page.messages[2].id)
+        assertEquals("m1", page.messages[3].id)
+        assertTrue(page.messages[2].own)
+        assertFalse(page.messages[0].own)
+        assertFalse(page.messages[3].own)
+        assertEquals("hello", page.messages[2].text)
+        assertEquals("hi", page.messages[3].text)
+        // Previews never leak the raw item_type.
+        assertEquals("Shared a reel", page.messages[0].text)
+        assertEquals("Liked a message", page.messages[1].text)
+        // The other side saw my newest message m2.
+        assertEquals("m2", page.thread.seenItemId)
+        assertEquals("Shared a reel", page.thread.lastMessage)
+    }
+
+    @Test
+    fun dmSendParsesPayload() {
+        val body = """{"payload":{"item_id":"m100","timestamp":1730000005000000,"text":"hello","item_type":"text"},"status":"ok"}"""
+        val message = WebInstagramWebApi.parseDmSendResponse(body, "t1", "9", "hello")
+        assertNotNull(message)
+        assertEquals("m100", message!!.id)
+        assertEquals("t1", message.threadId)
+        assertEquals("hello", message.text)
+        assertTrue(message.own)
+        assertEquals(com.instaos.app.model.DmMessageStatus.SENT, message.status)
+        assertNull(WebInstagramWebApi.parseDmSendResponse("""{"status":"ok"}""", "t1", "9", "hello"))
+    }
+
+    @Test
+    fun searchParsesUsersOnly() {
+        val body = """
+            {"users":[
+              {"user":{"pk":11,"username":"found","full_name":"Found One","profile_pic_url":"","is_verified":true}},
+              {"user":{"pk":12,"username":"","full_name":"No name"}}
+            ],"status":"ok"}
+        """.trimIndent()
+        val users = WebInstagramWebApi.parseSearchResponse(body)
+        assertNotNull(users)
+        assertEquals(1, users!!.size)
+        assertEquals("found", users[0].username)
+        assertEquals("Found One", users[0].displayName)
+        assertTrue(users[0].verified)
+        assertEquals(emptyList<com.instaos.app.model.UserRef>(), WebInstagramWebApi.parseSearchResponse("""{"users":[]}"""))
+    }
+
+    @Test
+    fun storyMediaPicksBestImageAndVideoUrl() {
+        val body = """
+            {"reels":{"9":{"user":{"pk":10,"username":"friend","full_name":"Friend","profile_pic_url":"","is_verified":false},
+              "items":[
+                {"id":"s1","taken_at":1730000000,"expiring_at":1730086400,"media_type":1,
+                 "image_versions2":{"candidates":[
+                   {"width":320,"height":568,"url":"https://cdn.example.com/small.jpg"},
+                   {"width":1080,"height":1920,"url":"https://cdn.example.com/big.jpg"}]}},
+                {"id":"s2","taken_at":1730000001,"media_type":2,
+                 "video_versions":[{"url":"https://cdn.example.com/v.mp4","width":720,"height":1280}]}
+              ]}},"status":"ok"}
+        """.trimIndent()
+        val stories = WebInstagramWebApi.parseStoryMediaResponse(body)
+        assertNotNull(stories)
+        assertEquals(2, stories!!.size)
+        assertEquals("https://cdn.example.com/big.jpg", stories[0].media.path)
+        assertEquals(com.instaos.app.model.MediaKind.IMAGE, stories[0].media.kind)
+        assertEquals("friend", stories[0].author?.username)
+        assertEquals("https://cdn.example.com/v.mp4", stories[1].media.path)
+        assertEquals(com.instaos.app.model.MediaKind.VIDEO, stories[1].media.kind)
+        assertNull(WebInstagramWebApi.parseStoryMediaResponse("not json"))
+    }
 }

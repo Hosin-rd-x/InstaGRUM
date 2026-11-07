@@ -55,6 +55,31 @@ class FeedRepositoryTest {
             text: String,
             parentId: String?,
         ): ApiResult<Unit> = ApiResult.Success(Unit)
+
+        // Phase 3 members — the feed tests never call them; empty successes.
+        override suspend fun getDmInbox(session: WebSession): ApiResult<DmInboxPage> =
+            ApiResult.Success(DmInboxPage(emptyList()))
+
+        override suspend fun getDmThread(
+            session: WebSession,
+            threadId: String,
+            cursor: String?,
+        ): ApiResult<DmThreadPage> =
+            ApiResult.Success(DmThreadPage(com.instaos.app.model.DmThread(threadId), emptyList()))
+
+        override suspend fun sendDm(session: WebSession, threadId: String, text: String): ApiResult<com.instaos.app.model.DmMessage> =
+            ApiResult.Success(
+                com.instaos.app.model.DmMessage("m1", threadId, UserRef("42", "someone"), text, 1_730_000_000_000L)
+            )
+
+        override suspend fun markDmThreadSeen(session: WebSession, threadId: String, itemId: String): ApiResult<Unit> =
+            ApiResult.Success(Unit)
+
+        override suspend fun getStoryMedia(session: WebSession, reelIds: List<String>): ApiResult<List<com.instaos.app.model.Story>> =
+            ApiResult.Success(emptyList())
+
+        override suspend fun searchUsers(session: WebSession, query: String): ApiResult<List<UserRef>> =
+            ApiResult.Success(emptyList())
     }
 
     private fun repository(api: CountingApi): Pair<FeedRepository, FeedCache> {

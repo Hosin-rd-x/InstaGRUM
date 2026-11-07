@@ -41,7 +41,7 @@ class ActivityPersistenceTest {
             InitialState.create(System.currentTimeMillis()).copy(
                 profile = com.instaos.app.model.Profile("first.user", "First"),
                 profileCreated = true,
-                settings = com.instaos.app.model.SimulationSettings(paused = true)
+                settings = com.instaos.app.model.UiSettings(darkMode = false)
             )
         )
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()

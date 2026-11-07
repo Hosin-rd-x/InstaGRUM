@@ -2,7 +2,6 @@ package com.instaos.app.data
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 
@@ -66,15 +65,11 @@ class AndroidStorageTest {
     }
 
     @Test
-    fun everyBundledPhotoDecodesWithoutNetwork() {
-        repeat(9) { index ->
-            context.assets.open("photos/$index.jpg").use { input ->
-                val bitmap = BitmapFactory.decodeStream(input, null, BitmapFactory.Options().apply { inSampleSize = 8 })
-                assertNotNull("Bundled image $index could not be decoded", bitmap)
-                assertTrue(bitmap!!.width > 0 && bitmap.height > 0)
-                bitmap.recycle()
-            }
-        }
+    fun noBundledDemoPhotosShipAnymore() {
+        // Phase 3 deleted the bundled fake photos with the simulation.
+        // A blank media path renders an honest empty tile instead — so
+        // there must be nothing under assets/photos to mistake for real.
+        assertTrue(runCatching { context.assets.list("photos") }.getOrNull().isNullOrEmpty())
     }
 
     @Test

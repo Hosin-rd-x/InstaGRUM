@@ -16,6 +16,13 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
 
+/**
+ * Phase 3: onboarding, the growth-pace settings and Live are gone, so
+ * those tests are gone too. What is tested here is the real flow:
+ * Home → Profile → Create → like + comment; the accent picker in
+ * Settings; the story viewer with its honest insights note; and the
+ * DM inbox / Search screens opening without placeholders.
+ */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w412dp-h915dp")
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
@@ -39,18 +46,17 @@ class AppFlowsTest {
         }
     }
 
-    private fun completeOnboarding() {
-        compose.onNodeWithText("Make it yours.").assertIsDisplayed()
-        compose.onNodeWithTag("setupUsername").performTextInput("my.world")
-        compose.onNodeWithTag("setupName").performTextInput("My Name")
-        compose.onNodeWithTag("completeProfile").performSemanticsAction(SemanticsActions.OnClick) { it() }
-        compose.runOnIdle { assertTrue(state.value.profileCreated) }
+    private fun withProfile() {
+        state.value = state.value.copy(
+            profile = Profile("my.world", "My Name"),
+            profileCreated = true
+        )
     }
 
     @Test
-    fun onboardingThenCreatePostThenLikeAndComment() {
+    fun createPostThenLikeAndComment() {
         launch()
-        completeOnboarding()
+        withProfile()
         // Phase 2 nav: Home is the default tab now; the profile lives
         // under the Profile tab, and Create is the "+" top-left.
         compose.onNodeWithContentDescription("Profile").performClick()
@@ -61,7 +67,7 @@ class AppFlowsTest {
         compose.runOnIdle {
             dispatch(
                 Action.CreatePost(
-                    Media(artwork = 3), "A quiet morning", "", 0, 0, 0, 35
+                    Media(), "A quiet morning", ""
                 )
             )
         }
@@ -78,30 +84,29 @@ class AppFlowsTest {
     }
 
     @Test
-    fun chooseSlowGrowthPaceFromSettings() {
+    fun chooseAccentColourFromSettings() {
         launch()
-        completeOnboarding()
+        withProfile()
         compose.onNodeWithContentDescription("Profile").performClick()
         compose.onNodeWithContentDescription("Settings").performClick()
-        compose.onNodeWithTag("settingsList").performScrollToNode(hasTestTag("pace-SLOW"))
-        compose.onNodeWithTag("pace-SLOW").performClick()
-        compose.runOnIdle { assertEquals(GrowthPreset.SLOW, state.value.settings.preset) }
-        compose.onNodeWithTag("settingsList").performScrollToNode(hasTestTag("pace-FAST"))
-        compose.onNodeWithTag("pace-FAST").performClick()
-        compose.runOnIdle { assertEquals(GrowthPreset.FAST, state.value.settings.preset) }
+        compose.onNodeWithTag("settingsList").performScrollToNode(hasTestTag("accent-LIME"))
+        compose.onNodeWithTag("accent-LIME").performClick()
+        compose.runOnIdle { assertEquals(AccentColor.LIME, state.value.settings.accent) }
+        compose.onNodeWithTag("accent-PINK").performClick()
+        compose.runOnIdle { assertEquals(AccentColor.PINK, state.value.settings.accent) }
     }
 
     @Test
-    fun storyOpensInsightsWithViewerList() {
+    fun storyOpensViewerWithHonestInsightsNote() {
         launch()
-        completeOnboarding()
+        withProfile()
 
         compose.mainClock.autoAdvance = false
 
         state.value = state.value.copy(profile = state.value.profile.copy(followers = 1_000))
         state.value = StateReducer.reduce(
             state.value,
-            Action.CreateStory(Media(artwork = 2), "", Long.MAX_VALUE, "", StoryOverlay(text = "hey")),
+            Action.CreateStory(Media(), "", "", StoryOverlay(text = "hey")),
             now,
             "ui-${sequence++}"
         )
@@ -114,25 +119,19 @@ class AppFlowsTest {
         compose.mainClock.advanceTimeBy(500)
         compose.waitForIdle()
         compose.onNodeWithTag("storyInsights").assertIsDisplayed()
-        compose.onNodeWithText("Viewers").assertExists()
-        compose.onNodeWithContentDescription("Insights tab", useUnmergedTree = true).assertExists()
+        compose.onNodeWithText("Viewer list isn't available", substring = true).assertExists()
     }
 
     @Test
-    fun liveStartsFromCreatorAndShowsEmptyRoomMessage() {
+    fun dmInboxAndSearchOpenWithoutPlaceholders() {
         launch()
-        completeOnboarding()
-        compose.onNodeWithContentDescription("Create content").performClick()
-        compose.onNodeWithText("LIVE").performClick()
-        compose.runOnIdle {
-            dispatch(
-                Action.StartLive(
-                    LiveConfig(title = "Test live", durationMinutes = 60)
-                )
-            )
-        }
-        compose.onNodeWithText("LIVE").assertExists()
-        compose.runOnIdle { assertNotNull(state.value.activeLive) }
-        compose.onNodeWithText("Give people a moment to join.", substring = true).assertExists()
+        withProfile()
+        compose.runOnIdle { dispatch(Action.NavigateRoute(Route.DmInbox)) }
+        compose.onNodeWithText("Messages").assertIsDisplayed()
+        // Not signed in in this test, so the inbox says so honestly.
+        compose.onNodeWithText("Sign in to see your messages").assertIsDisplayed()
+        compose.runOnIdle { dispatch(Action.NavigateRoute(Route.Search)) }
+        compose.onNodeWithTag("searchField").assertIsDisplayed()
+        compose.onNodeWithText("Explore is empty").assertIsDisplayed()
     }
 }
